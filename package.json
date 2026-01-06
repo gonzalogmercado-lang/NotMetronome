@@ -1,6 +1,6 @@
 {
   "name": "notmetronome",
-  "main": "App.js",
+  "main": "expo/AppEntry",
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",

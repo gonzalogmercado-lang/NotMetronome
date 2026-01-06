@@ -1,5 +1,2 @@
-import Navigation from './Navigation';
-
-export default function App() {
-  return <Navigation />;
-}
+import AppRoot from "./src/app/AppRoot";
+export default AppRoot;
