@@ -1,16 +1,29 @@
 import { create } from "zustand";
 
 export type Meter = {
-  top: number;
-  bottom: number;
+  n: number;
+  d: number;
 };
 
 type MeterState = {
   meter: Meter;
-  setMeter: (meter: Meter) => void;
+  groups?: number[];
+  setMeter: (n: number, d: number) => void;
+  setGroups: (groups: number[]) => void;
+  clearGroups: () => void;
 };
 
-export const useMeterStore = create<MeterState>((set) => ({
-  meter: { top: 4, bottom: 4 },
-  setMeter: (meter) => set({ meter }),
+const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+
+export const useMeterStore = create<MeterState>((set, get) => ({
+  meter: { n: 4, d: 4 },
+  groups: undefined,
+  setMeter: (n, d) =>
+    set((state) => {
+      const currentGroups = state.groups;
+      const isValidForMeter = currentGroups && sum(currentGroups) === n ? currentGroups : undefined;
+      return { meter: { n, d }, groups: isValidForMeter };
+    }),
+  setGroups: (groups) => set({ groups }),
+  clearGroups: () => set({ groups: undefined }),
 }));
