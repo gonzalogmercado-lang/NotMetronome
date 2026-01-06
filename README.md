@@ -1,50 +1,63 @@
-# Welcome to your Expo app 👋
+# NotMetronome
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Metronomo React Native (Expo) con audio sample-accurate.
 
-## Get started
+## Requisitos previos
 
-1. Install dependencies
+- Node 20+
+- `npm install -g eas-cli` para generar development builds.
+- Dispositivo o emulador Android con USB debugging/habilitado.
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Instalación
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Development build (Expo dev client)
 
-## Learn more
+1. **Generar el cliente**
 
-To learn more about developing your project with Expo, look at the following resources:
+   ```bash
+   eas build --profile development --platform android
+   ```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+   - Requiere sesión en Expo: `eas login`.
+   - Descarga/instala el `.apk` generado en el dispositivo/emulador.
 
-## Join the community
+2. **Arrancar el bundler en modo dev-client**
 
-Join our community of developers creating universal apps.
+   ```bash
+   npm run start:dev
+   ```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+   Luego, desde el prompt de Expo, abre en Android (físico o emulador) con el dev build instalado.
+
+### Configuración incluida
+
+- `expo-dev-client` agregado en `package.json` y `app.json` (plugins) para habilitar dev builds.
+- `react-native-audio-api` configurado en `app.json` (plugin) y `metro.config.js` acepta assets de audio (`wav`, `mp3`, `caf`).
+
+## Scheduler de audio
+
+- Implementación: `src/audio/MetronomeAudioScheduler.ts`
+  - Usa `react-native-audio-api` (Web Audio API-like) para programar ticks en la timeline de audio (no en JS timers).
+  - Lookahead fijo (25 ms) que agenda una ventana de ~180 ms con `start()` sample-accurate.
+  - Recalcula acentos por compás/clave una sola vez por cambio de métrica.
+- Hook de integración: `src/audio/useMetronomeAudio.ts` (fuente de verdad para UI y click).
+
+## Ejecutar la app
+
+```bash
+npx expo start --dev-client
+```
+
+> Nota: Expo Go **no** soporta `react-native-audio-api`; usa siempre el dev build.
+
+## Pruebas manuales sugeridas (Android)
+
+- 120 BPM en 4/4: start/stop sin duplicar clicks, estabilidad del tempo.
+- 180 BPM en 7/8 con clave: revisar acentos fuertes/medios/suaves.
+- 220 BPM en 11/16 con clave: sin flams ni jitter audible.
+- Cambios de BPM en reproducción: transición suave y re-sync limpio.
+- Cambios de compás/clave en reproducción: el audio sigue siendo el reloj (UI sólo refleja los ticks del scheduler).

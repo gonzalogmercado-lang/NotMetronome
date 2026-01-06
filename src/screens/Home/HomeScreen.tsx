@@ -4,11 +4,11 @@ import { Button, Pressable, StyleSheet, Switch, Text, View } from "react-native"
 import ClaveButton from "../../components/domain/ClaveButton";
 import ClaveModal from "../../components/domain/ClaveModal";
 import { TickInfo } from "../../core/types";
-import { useIntervalClock } from "../../engine/clock";
+import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
 import { useMeterStore } from "../../store/meter.store";
 import { useTempoStore } from "../../store/tempo.store";
 import { useUiStore } from "../../store/ui.store";
-import { ACCENT_GAIN, accentPatternGlyphs, deriveAccentPerTick } from "../../utils/rhythm/deriveAccentPerTick";
+import { ACCENT_GAIN, accentPatternGlyphs } from "../../utils/rhythm/deriveAccentPerTick";
 import StatRow from "./components/StatRow";
 
 function HomeScreen() {
@@ -20,16 +20,17 @@ function HomeScreen() {
   const [tickCount, setTickCount] = useState(0);
   const [isClaveOpen, setClaveOpen] = useState(false);
 
-  const { start: startClock, stop: stopClock } = useIntervalClock({
+  const { start: startClock, stop: stopClock, lastTick, accentLevels, audioState } = useMetronomeAudio({
     bpm,
     meter,
+    groups,
     onTick: (info) => {
-      setTickInfo(info);
       setTickCount((prev) => prev + 1);
+      setTickInfo(info);
     },
   });
 
-  const handleStartStop = () => {
+  const handleStartStop = async () => {
     if (isPlaying) {
       stopClock();
       setTickCount(0);
@@ -38,8 +39,8 @@ function HomeScreen() {
     } else {
       setTickCount(0);
       setTickInfo(null);
-      startClock();
-      setPlaying(true);
+      const ok = await startClock();
+      setPlaying(!!ok);
     }
   };
 
@@ -53,20 +54,21 @@ function HomeScreen() {
     setMeter(meter.n, nextBottom);
   };
 
-  const accentLevels = useMemo(() => deriveAccentPerTick(meter, groups), [groups, meter]);
   const accentGlyphs = useMemo(() => accentPatternGlyphs(accentLevels), [accentLevels]);
   const accentGains = useMemo(() => accentLevels.map((level) => ACCENT_GAIN[level]), [accentLevels]);
 
-  const currentAccentLevel = tickInfo ? accentLevels[tickInfo.barTick] : undefined;
-  const currentAccentGain = currentAccentLevel ? ACCENT_GAIN[currentAccentLevel] : undefined;
+  const currentAccentLevel = lastTick?.accentLevel ?? (tickInfo ? accentLevels[tickInfo.barTick] : undefined);
+  const currentAccentGain = lastTick?.accentGain ?? (currentAccentLevel ? ACCENT_GAIN[currentAccentLevel] : undefined);
 
   const shouldShowClave = proMode || ((meter.d === 8 || meter.d === 16) && [5, 7, 11, 13, 15].includes(meter.n));
   const meterLabel = `${meter.n}/${meter.d}`;
+  const audioStatusLabel =
+    audioState === "ready" ? "Audio: armado con react-native-audio-api" : audioState === "error" ? "Audio: no disponible" : "Audio: inicializando";
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>NotMetronome</Text>
-      <Text style={styles.statusNote}>Audio: pendiente (modo visual)</Text>
+      <Text style={styles.statusNote}>{audioStatusLabel}</Text>
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Tempo</Text>
