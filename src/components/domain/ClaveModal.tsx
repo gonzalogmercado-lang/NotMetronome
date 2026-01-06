@@ -1,29 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { allowedGroupSizesForMeter, supportsClavePresets } from "../../core/constants/claveConfig";
 import { getClavePresets } from "../../core/constants/clavePresets";
+import { Meter } from "../../core/types";
 import { buildCanFill } from "../../utils/rhythm/buildCanFill";
 import { accentPatternGlyphs, deriveAccentPerTick } from "../../utils/rhythm/deriveAccentPerTick";
 
 type ClaveModalProps = {
   visible: boolean;
-  meter: { n: number; d: number };
+  meter: Meter;
   currentGroups?: number[];
   onRequestClose: () => void;
   onUpdateGroups: (groups: number[]) => void;
   onClearGroups: () => void;
 };
 
-const allowedSizesForMeter = (d: number) => {
-  if (d === 8 || d === 16) return [2, 3, 4, 5];
-  return [2, 3, 4, 5];
-};
-
 function ClaveModal({ visible, meter, currentGroups, onRequestClose, onUpdateGroups, onClearGroups }: ClaveModalProps) {
   const [builderGroups, setBuilderGroups] = useState<number[]>(currentGroups ?? []);
 
-  const allowedSizes = useMemo(() => allowedSizesForMeter(meter.d), [meter.d]);
+  const allowedSizes = useMemo(() => allowedGroupSizesForMeter(meter), [meter]);
   const canFill = useMemo(() => buildCanFill(meter.n, allowedSizes), [meter.n, allowedSizes]);
+  const supportsPresets = useMemo(() => supportsClavePresets(meter), [meter]);
 
   useEffect(() => {
     if (visible) {
@@ -68,13 +66,15 @@ function ClaveModal({ visible, meter, currentGroups, onRequestClose, onUpdateGro
           <Button title="Close" onPress={onRequestClose} />
         </View>
         <ScrollView contentContainerStyle={styles.content}>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Sugerencias</Text>
-            {presetOptions.length === 0 ? (
-              <Text style={styles.helper}>No hay sugerencias para {meter.n}/{meter.d}</Text>
-            ) : (
-              <View style={styles.presetsGrid}>
-                {presetOptions.map((preset, index) => (
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Sugerencias</Text>
+        {!supportsPresets ? (
+          <Text style={styles.helper}>Presets disponibles solo para denominador 8 por ahora.</Text>
+        ) : presetOptions.length === 0 ? (
+          <Text style={styles.helper}>No hay sugerencias para {meter.n}/{meter.d}</Text>
+        ) : (
+          <View style={styles.presetsGrid}>
+            {presetOptions.map((preset, index) => (
                   <Button key={`${preset.join("-")}-${index}`} title={preset.join(" + ")} onPress={() => commitGroups(preset)} />
                 ))}
               </View>

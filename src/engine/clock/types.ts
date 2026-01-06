@@ -1,10 +1,3 @@
-export type TickInfo = {
-  tickIndex: number;
-  atMs: number;
-  barTick: number;
-  isDownbeat: boolean;
-};
+import { ClockEvents, TickInfo } from "../../core/types";
 
-export type ClockEvents = {
-  onTick?: (info: TickInfo) => void;
-};
+export type { ClockEvents, TickInfo };

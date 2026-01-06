@@ -1,4 +1,4 @@
-type Meter = { n: number; d: number };
+import { Meter } from "../types";
 
 const presetsByTop: Record<number, number[][]> = {
   5: [

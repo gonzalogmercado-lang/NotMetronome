@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import ClaveButton from "../../components/domain/ClaveButton";
 import ClaveModal from "../../components/domain/ClaveModal";
-import { IntervalClock, TickInfo } from "../../engine/clock";
+import { TickInfo } from "../../core/types";
+import { useIntervalClock } from "../../engine/clock";
 import { useMeterStore } from "../../store/meter.store";
 import { useTempoStore } from "../../store/tempo.store";
 import { useUiStore } from "../../store/ui.store";
@@ -19,47 +20,25 @@ function HomeScreen() {
   const [tickCount, setTickCount] = useState(0);
   const [isClaveOpen, setClaveOpen] = useState(false);
 
-  const clock = useMemo(
-    () =>
-      new IntervalClock({
-        bpm,
-        meterTop: meter.n,
-        meterBottom: meter.d,
-        events: {
-          onTick: (info) => {
-            setTickInfo(info);
-            setTickCount((prev) => prev + 1);
-          },
-        },
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
-
-  useEffect(() => {
-    clock.setBpm(bpm);
-  }, [bpm, clock]);
-
-  useEffect(() => {
-    clock.setMeter(meter.n, meter.d);
-  }, [clock, meter.d, meter.n]);
-
-  useEffect(() => {
-    return () => {
-      clock.stop();
-    };
-  }, [clock]);
+  const { start: startClock, stop: stopClock } = useIntervalClock({
+    bpm,
+    meter,
+    onTick: (info) => {
+      setTickInfo(info);
+      setTickCount((prev) => prev + 1);
+    },
+  });
 
   const handleStartStop = () => {
     if (isPlaying) {
-      clock.stop();
+      stopClock();
       setTickCount(0);
       setTickInfo(null);
       setPlaying(false);
     } else {
       setTickCount(0);
       setTickInfo(null);
-      clock.start();
+      startClock();
       setPlaying(true);
     }
   };
@@ -87,6 +66,7 @@ function HomeScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>NotMetronome</Text>
+      <Text style={styles.statusNote}>Audio: pendiente (modo visual)</Text>
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Tempo</Text>
@@ -163,6 +143,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "700",
+  },
+  statusNote: {
+    color: "#555",
+    fontSize: 12,
+    marginTop: -6,
   },
   card: {
     borderRadius: 12,

@@ -1,9 +1,6 @@
 import { create } from "zustand";
 
-export type Meter = {
-  n: number;
-  d: number;
-};
+import { Meter } from "../core/types";
 
 type MeterState = {
   meter: Meter;
@@ -27,3 +24,5 @@ export const useMeterStore = create<MeterState>((set, get) => ({
   setGroups: (groups) => set({ groups }),
   clearGroups: () => set({ groups: undefined }),
 }));
+
+export type { Meter };

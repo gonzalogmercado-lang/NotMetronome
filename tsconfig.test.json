@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "build-tests",
+    "noEmit": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/core/**/*.ts", "src/utils/rhythm/**/*.ts", "tests/types/**/*.d.ts", "tests/unit/**/*.ts"],
+  "exclude": ["src/_legacy/**"]
+}
