@@ -1,2 +1,19 @@
-// Placeholder for future root navigator.
-export {};
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+
+import HomeScreen from "../screens/Home/HomeScreen";
+
+export type RootStackParamList = {
+  Home: undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+function RootNavigator() {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name="Home" component={HomeScreen} />
+    </Stack.Navigator>
+  );
+}
+
+export default RootNavigator;
