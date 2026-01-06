@@ -1,4 +1,6 @@
-export type AccentLevel = "BAR" | "GROUP" | "WEAK";
+import { AccentLevel, Meter } from "../../core/types";
+
+export type { AccentLevel } from "../../core/types";
 
 const COMPOUND_TOPS = new Set([6, 9, 12]);
 
@@ -14,7 +16,7 @@ export const ACCENT_GAIN: Record<AccentLevel, number> = {
   WEAK: 0.4,
 };
 
-export function deriveAccentPerTick(meter: { n: number; d: number }, groups?: number[]): AccentLevel[] {
+export function deriveAccentPerTick(meter: Meter, groups?: number[]): AccentLevel[] {
   const ticksPerBar = Math.max(0, Math.floor(meter.n));
   if (ticksPerBar === 0) return [];
 
