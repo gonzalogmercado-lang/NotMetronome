@@ -37,6 +37,7 @@ npm install
 
 - `expo-dev-client` agregado en `package.json` y `app.json` (plugins) para habilitar dev builds.
 - `react-native-audio-api` configurado en `app.json` (plugin) y `metro.config.js` acepta assets de audio (`wav`, `mp3`, `caf`).
+- `eas.json` incluye el profile `development` con `developmentClient: true` para generar el dev client sin configuración extra.
 
 ## Scheduler de audio
 
