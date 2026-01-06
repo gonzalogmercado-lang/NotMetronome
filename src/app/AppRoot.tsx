@@ -1,10 +1,12 @@
-import React from "react";
-import { Text, View } from "react-native";
+import { Text } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 export default function AppRoot() {
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-      <Text style={{ fontSize: 24 }}>NotMetronome OK ✅</Text>
-    </View>
+    <SafeAreaProvider>
+      <SafeAreaView style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <Text>NotMetronome OK ✅</Text>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
