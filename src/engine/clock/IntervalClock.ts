@@ -9,7 +9,9 @@ class IntervalClock {
 
   private meterBottom: number;
 
-  private tickIntervalId: ReturnType<typeof setInterval> | null = null;
+  private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  private nextTickAt: number | null = null;
 
   private tickIndex = 0;
 
@@ -22,13 +24,13 @@ class IntervalClock {
     this.events = events;
   }
 
-  private get intervalMs() {
-    return MS_PER_MINUTE / this.bpm;
+  private get intervalMs(): number {
+    return (MS_PER_MINUTE / this.bpm) * (4 / this.meterBottom);
   }
 
   setBpm(bpm: number) {
     this.bpm = bpm;
-    if (this.tickIntervalId) {
+    if (this.tickTimeoutId) {
       this.restart();
     }
   }
@@ -36,18 +38,23 @@ class IntervalClock {
   setMeter(top: number, bottom: number) {
     this.meterTop = top;
     this.meterBottom = bottom;
+    if (this.tickTimeoutId) {
+      this.restart();
+    }
   }
 
   start() {
-    if (this.tickIntervalId) return;
+    if (this.tickTimeoutId) return;
     this.tickIndex = 0;
-    this.tickIntervalId = setInterval(() => this.tick(), this.intervalMs);
+    this.nextTickAt = Date.now();
+    this.scheduleNextTick();
   }
 
   stop() {
-    if (this.tickIntervalId) {
-      clearInterval(this.tickIntervalId);
-      this.tickIntervalId = null;
+    if (this.tickTimeoutId) {
+      clearTimeout(this.tickTimeoutId);
+      this.tickTimeoutId = null;
+      this.nextTickAt = null;
     }
   }
 
@@ -56,17 +63,30 @@ class IntervalClock {
     this.start();
   }
 
+  private scheduleNextTick() {
+    const now = Date.now();
+    if (this.nextTickAt === null) {
+      this.nextTickAt = now;
+    }
+    const delay = Math.max(0, this.nextTickAt - now);
+    this.tickTimeoutId = setTimeout(() => this.tick(), delay);
+  }
+
   private tick() {
     const now = Date.now();
     const currentTick = this.tickIndex;
-    const isDownbeat = currentTick % this.meterTop === 0;
+    const barTick = currentTick % this.meterTop;
+    const isDownbeat = barTick === 0;
     const info: TickInfo = {
       tickIndex: currentTick,
       atMs: now,
+      barTick,
       isDownbeat,
     };
     this.events.onTick?.(info);
     this.tickIndex += 1;
+    this.nextTickAt = (this.nextTickAt ?? now) + this.intervalMs;
+    this.scheduleNextTick();
   }
 }
 
