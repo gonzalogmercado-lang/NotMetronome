@@ -36,15 +36,17 @@ npm install
 ### Configuración incluida
 
 - `expo-dev-client` agregado en `package.json` y `app.json` (plugins) para habilitar dev builds.
-- `react-native-audio-api` configurado en `app.json` (plugin) y `metro.config.js` acepta assets de audio (`wav`, `mp3`, `caf`).
+- `metro.config.js` acepta assets de audio (`wav`, `mp3`, `caf`).
 - `eas.json` incluye el profile `development` con `developmentClient: true` para generar el dev client sin configuración extra.
 
 ## Scheduler de audio
 
-- Implementación: `src/audio/MetronomeAudioScheduler.ts`
-  - Usa `react-native-audio-api` (Web Audio API-like) para programar ticks en la timeline de audio (no en JS timers).
+- Implementación: `src/audio/engines/web/WebMetronomeAudioEngine.ts`
+  - Usa Web Audio API nativa en web para programar ticks en la timeline de audio (no en JS timers).
   - Lookahead fijo (25 ms) que agenda una ventana de ~180 ms con `start()` sample-accurate.
   - Recalcula acentos por compás/clave una sola vez por cambio de métrica.
+  - Audio actual por síntesis (oscilador + envelope); samples quedan para una siguiente iteración.
+- Stub nativo: `src/audio/engines/native/NativeMetronomeAudioEngine.ts` (sin audio por ahora).
 - Hook de integración: `src/audio/useMetronomeAudio.ts` (fuente de verdad para UI y click).
 
 ## Ejecutar la app
@@ -53,7 +55,7 @@ npm install
 npx expo start --dev-client
 ```
 
-> Nota: Expo Go **no** soporta `react-native-audio-api`; usa siempre el dev build.
+> Nota: En Android/iOS el engine nativo aún no está implementado; por ahora sólo hay audio en web.
 
 ## Pruebas manuales sugeridas (Android)
 

@@ -63,7 +63,7 @@ function HomeScreen() {
   const shouldShowClave = proMode || ((meter.d === 8 || meter.d === 16) && [5, 7, 11, 13, 15].includes(meter.n));
   const meterLabel = `${meter.n}/${meter.d}`;
   const audioStatusLabel =
-    audioState === "ready" ? "Audio: armado con react-native-audio-api" : audioState === "error" ? "Audio: no disponible" : "Audio: inicializando";
+    audioState === "ready" ? "Audio: listo (Web Audio)" : audioState === "error" ? "Audio: no disponible" : "Audio: inicializando";
 
   return (
     <View style={styles.container}>
