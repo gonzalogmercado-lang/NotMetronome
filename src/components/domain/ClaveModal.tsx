@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { allowedGroupSizesForMeter, supportsClavePresets } from "../../core/constants/claveConfig";
-import { getClavePresets } from "../../core/constants/clavePresets";
+import { allowedGroupSizesForMeter, getClavePresets, supportsClavePresets } from "../../core/clave/presets";
 import { Meter } from "../../core/types";
 import { buildCanFill } from "../../utils/rhythm/buildCanFill";
 import { accentPatternGlyphs, deriveAccentPerTick } from "../../utils/rhythm/deriveAccentPerTick";
