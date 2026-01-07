@@ -251,12 +251,24 @@ class MetronomeAudioScheduler {
   async playTestBeep(): Promise<{ ok: boolean; details?: string }> {
     await this.ensureContext();
     if (!this.context) return { ok: false, details: "Audio context not available" };
-    if ("state" in this.context && this.context.state === "suspended") {
-      return { ok: false, details: "Audio context suspended" };
+
+    if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
+      await (this.context as AudioContext).resume();
     }
+
+    const state = "state" in this.context ? this.context.state : "unknown";
+    if (state === "suspended") {
+      return { ok: false, details: `Audio context suspended; state=${state}` };
+    }
+
     const when = this.context.currentTime + 0.01;
     this.scheduleClick(when, "BAR_STRONG", 1);
-    return { ok: true, details: "Beep scheduled" };
+    const sampleRate = "sampleRate" in this.context ? this.context.sampleRate : undefined;
+    const detailParts = [`state=${state}`];
+    if (sampleRate) {
+      detailParts.push(`sampleRate=${sampleRate}`);
+    }
+    return { ok: true, details: detailParts.join(", ") };
   }
 }
 

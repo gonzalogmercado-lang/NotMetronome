@@ -4,7 +4,7 @@ import { Button, StyleSheet, Text, View } from "react-native";
 import { AudioState, useMetronomeAudio } from "../../audio/useMetronomeAudio";
 
 function SettingsScreen() {
-  const { testBeep, audioState } = useMetronomeAudio({
+  const { testBeep, audioState, audioDetails } = useMetronomeAudio({
     bpm: 120,
     meter: { n: 4, d: 4 },
   });
@@ -24,6 +24,7 @@ function SettingsScreen() {
       <Text>Configure NotMetronome defaults here.</Text>
       <Text>Audio state: {displayAudioState}</Text>
       <Text>Last action: {lastAction}</Text>
+      {audioDetails ? <Text>Audio details: {audioDetails}</Text> : null}
       <Button title="Test Beep" onPress={handleTestBeep} />
     </View>
   );

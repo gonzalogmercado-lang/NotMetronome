@@ -69,7 +69,7 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     return schedulerRef.current?.stop();
   }, []);
 
-  const testBeep = useCallback(async () => {
+  const testBeep = useCallback(async (): Promise<{ ok: boolean; details?: string }> => {
     const result = await schedulerRef.current?.playTestBeep();
     return result ?? { ok: false, details: "Scheduler not ready" };
   }, []);
