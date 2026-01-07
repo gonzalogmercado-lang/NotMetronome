@@ -45,6 +45,7 @@ npm install
   - Usa `react-native-audio-api` (Web Audio API-like) para programar ticks en la timeline de audio (no en JS timers).
   - Lookahead fijo (25 ms) que agenda una ventana de ~180 ms con `start()` sample-accurate.
   - Recalcula acentos por compás/clave una sola vez por cambio de métrica.
+  - Audio actual por síntesis (oscilador + envelope); samples quedan para una siguiente iteración.
 - Hook de integración: `src/audio/useMetronomeAudio.ts` (fuente de verdad para UI y click).
 
 ## Ejecutar la app

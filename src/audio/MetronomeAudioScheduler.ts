@@ -27,6 +27,21 @@ type AudioContextLike = AudioContext | BaseAudioContext;
 const LOOKAHEAD_MS = 25;
 const SCHEDULE_AHEAD_MS = 180;
 const START_DELAY_MS = 60;
+const ENVELOPE_ATTACK_SECONDS = 0.002;
+const ENVELOPE_DECAY_SECONDS = 0.016;
+const OSCILLATOR_DURATION_SECONDS = 0.03;
+
+const ACCENT_FREQUENCY: Record<AccentLevel, number> = {
+  BAR_STRONG: 1200,
+  GROUP_MED: 900,
+  WEAK: 700,
+};
+
+const ACCENT_PEAK: Record<AccentLevel, number> = {
+  BAR_STRONG: 0.95,
+  GROUP_MED: 0.65,
+  WEAK: 0.4,
+};
 
 async function loadAudioContext(): Promise<AudioContextLike | null> {
   try {
@@ -50,27 +65,12 @@ async function loadAudioContext(): Promise<AudioContextLike | null> {
   return null;
 }
 
-function createClickBuffer(context: AudioContextLike): AudioBuffer {
-  const sampleRate = context.sampleRate ?? 44_100;
-  const durationSeconds = 0.035;
-  const length = Math.ceil(sampleRate * durationSeconds);
-  const buffer = context.createBuffer(1, length, sampleRate);
-  const data = buffer.getChannelData(0);
-
-  const decaySamples = Math.ceil(length * 0.6);
-  for (let i = 0; i < length; i += 1) {
-    const envelope = i < decaySamples ? 1 - i / decaySamples : 0;
-    const value = envelope * Math.sin((2 * Math.PI * i * 440) / sampleRate);
-    data[i] = value;
-  }
-
-  return buffer;
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 class MetronomeAudioScheduler {
   private context: AudioContextLike | null = null;
-
-  private clickBuffer: AudioBuffer | null = null;
 
   private timerId: ReturnType<typeof setInterval> | null = null;
 
@@ -91,6 +91,8 @@ class MetronomeAudioScheduler {
   private isRunning = false;
 
   private events: SchedulerEvents;
+
+  private scheduledNodes = new Map<OscillatorNode, GainNode>();
 
   constructor(events: SchedulerEvents = {}) {
     this.events = events;
@@ -132,6 +134,21 @@ class MetronomeAudioScheduler {
     this.isRunning = false;
     this.tickIndex = 0;
     this.nextTickTime = 0;
+    if (this.context) {
+      const now = this.context.currentTime;
+      this.scheduledNodes.forEach((gain, osc) => {
+        try {
+          osc.stop(now);
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.warn("[MetronomeAudioScheduler] Unable to stop scheduled oscillator", error);
+        } finally {
+          osc.disconnect();
+          gain.disconnect();
+        }
+      });
+      this.scheduledNodes.clear();
+    }
   }
 
   async update(options: UpdateOptions) {
@@ -164,11 +181,10 @@ class MetronomeAudioScheduler {
       return;
     }
     this.events.onStateChange?.("ready");
-    this.clickBuffer = createClickBuffer(this.context);
   }
 
   private scheduleWindow() {
-    if (!this.context || !this.clickBuffer || !this.isRunning) return;
+    if (!this.context || !this.isRunning) return;
     const now = this.context.currentTime;
     const horizon = now + this.scheduleAheadSeconds;
 
@@ -179,23 +195,10 @@ class MetronomeAudioScheduler {
   }
 
   private scheduleTick(atTime: number) {
-    if (!this.context || !this.clickBuffer) return;
-    const source = this.context.createBufferSource();
-    source.buffer = this.clickBuffer;
-
-    const gainNode = this.context.createGain();
+    if (!this.context) return;
     const accentLevel = this.accentLevels[this.tickIndex % this.accentLevels.length] ?? "WEAK";
     const accentGain = this.accentGains[accentLevel] ?? 1;
-
-    gainNode.gain.setValueAtTime(accentGain, atTime);
-    source.connect(gainNode);
-    gainNode.connect(this.context.destination);
-
-    source.start(atTime);
-    source.onended = () => {
-      source.disconnect();
-      gainNode.disconnect();
-    };
+    this.scheduleClick(atTime, accentLevel, accentGain);
 
     const tick: ScheduledTick = {
       tickIndex: this.tickIndex,
@@ -209,6 +212,43 @@ class MetronomeAudioScheduler {
 
     this.events.onTick?.(tick);
     this.tickIndex += 1;
+  }
+
+  private scheduleClick(atTime: number, accentLevel: AccentLevel, accentGain: number) {
+    if (!this.context) return;
+    const osc = this.context.createOscillator();
+    const gainNode = this.context.createGain();
+
+    const frequency = ACCENT_FREQUENCY[accentLevel] ?? ACCENT_FREQUENCY.WEAK;
+    const basePeak = ACCENT_PEAK[accentLevel] ?? ACCENT_PEAK.WEAK;
+    const peak = clamp01(basePeak * accentGain);
+
+    osc.type = "square";
+    osc.frequency.setValueAtTime(frequency, atTime);
+
+    gainNode.gain.setValueAtTime(0, atTime);
+    gainNode.gain.linearRampToValueAtTime(peak, atTime + ENVELOPE_ATTACK_SECONDS);
+    gainNode.gain.linearRampToValueAtTime(0, atTime + ENVELOPE_ATTACK_SECONDS + ENVELOPE_DECAY_SECONDS);
+
+    osc.connect(gainNode);
+    gainNode.connect(this.context.destination);
+    this.scheduledNodes.set(osc, gainNode);
+
+    osc.start(atTime);
+    osc.stop(atTime + OSCILLATOR_DURATION_SECONDS);
+    osc.onended = () => {
+      osc.disconnect();
+      gainNode.disconnect();
+      this.scheduledNodes.delete(osc);
+    };
+  }
+
+  async playTestBeep() {
+    await this.ensureContext();
+    if (!this.context) return false;
+    const when = this.context.currentTime + 0.01;
+    this.scheduleClick(when, "BAR_STRONG", 1);
+    return true;
   }
 }
 
