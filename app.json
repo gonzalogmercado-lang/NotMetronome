@@ -27,7 +27,6 @@
     },
     "plugins": [
       "expo-dev-client",
-      "react-native-audio-api",
       [
         "expo-splash-screen",
         {
