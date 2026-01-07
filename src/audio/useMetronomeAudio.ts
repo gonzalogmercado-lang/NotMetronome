@@ -15,10 +15,13 @@ type UseMetronomeAudioOptions = MetronomeStartInput & {
   accentGains?: Partial<Record<AccentLevel, number>>;
 };
 
+export type AudioState = "idle" | "ready" | "suspended" | "error" | "starting";
+
 export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
   const { bpm, meter, groups, onTick, accentGains } = options;
   const schedulerRef = useRef<MetronomeAudioScheduler | null>(null);
-  const [audioState, setAudioState] = useState<"idle" | "ready" | "error" | "starting">("idle");
+  const [audioState, setAudioState] = useState<AudioState>("idle");
+  const [audioDetails, setAudioDetails] = useState<string | null>(null);
   const [lastTick, setLastTick] = useState<ScheduledTick | null>(null);
 
   const accentMap = useMemo(() => ({ ...ACCENT_GAIN, ...accentGains }), [accentGains]);
@@ -29,8 +32,13 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
         setLastTick(tick);
         onTick?.(tick);
       },
-      onStateChange: (state) => {
-        setAudioState(state === "ready" ? "ready" : state === "error" ? "error" : "idle");
+      onStateChange: (state, details) => {
+        setAudioDetails(details ?? null);
+        if (state === "ready" || state === "suspended" || state === "error") {
+          setAudioState(state);
+        } else {
+          setAudioState("idle");
+        }
       },
     });
   }
@@ -61,6 +69,11 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     return schedulerRef.current?.stop();
   }, []);
 
+  const testBeep = useCallback(async () => {
+    const result = await schedulerRef.current?.playTestBeep();
+    return result ?? { ok: false, details: "Scheduler not ready" };
+  }, []);
+
   const accentLevels = useMemo(() => deriveAccentPerTick(meter, groups), [groups, meter]);
 
   const tickInfo: TickInfo | null = useMemo(
@@ -83,6 +96,8 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     lastTick,
     accentLevels,
     audioState,
+    audioDetails,
+    testBeep,
   };
 }
 

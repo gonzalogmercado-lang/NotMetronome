@@ -171,7 +171,8 @@ class MetronomeAudioScheduler {
     if (this.context) {
       if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
         await (this.context as AudioContext).resume();
-        this.events.onStateChange?.("ready");
+        const currentState = "state" in this.context ? this.context.state : "unknown";
+        this.events.onStateChange?.(currentState === "suspended" ? "suspended" : "ready", `resume() called; state=${currentState}`);
       }
       return;
     }
@@ -180,7 +181,11 @@ class MetronomeAudioScheduler {
       this.events.onStateChange?.("error", "No AudioContext available");
       return;
     }
-    this.events.onStateChange?.("ready");
+    if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
+      await (this.context as AudioContext).resume();
+    }
+    const createdState = "state" in this.context ? this.context.state : "unknown";
+    this.events.onStateChange?.(createdState === "suspended" ? "suspended" : "ready", `context created; state=${createdState}`);
   }
 
   private scheduleWindow() {
@@ -243,12 +248,15 @@ class MetronomeAudioScheduler {
     };
   }
 
-  async playTestBeep() {
+  async playTestBeep(): Promise<{ ok: boolean; details?: string }> {
     await this.ensureContext();
-    if (!this.context) return false;
+    if (!this.context) return { ok: false, details: "Audio context not available" };
+    if ("state" in this.context && this.context.state === "suspended") {
+      return { ok: false, details: "Audio context suspended" };
+    }
     const when = this.context.currentTime + 0.01;
     this.scheduleClick(when, "BAR_STRONG", 1);
-    return true;
+    return { ok: true, details: "Beep scheduled" };
   }
 }
 
