@@ -1,14 +1,15 @@
 import { useCallback, useState } from "react";
 import { Button, StyleSheet, Text, View } from "react-native";
 
-import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
+import { AudioState, useMetronomeAudio } from "../../audio/useMetronomeAudio";
 
 function SettingsScreen() {
-  const { testBeep, audioState, audioDetails } = useMetronomeAudio({
+  const { testBeep, audioState } = useMetronomeAudio({
     bpm: 120,
     meter: { n: 4, d: 4 },
   });
-  const [lastAction, setLastAction] = useState<string>("None");
+  const [lastAction, setLastAction] = useState<string>("OK - idle");
+  const displayAudioState: AudioState = audioState === "ready" || audioState === "error" || audioState === "suspended" ? audioState : "suspended";
 
   const handleTestBeep = useCallback(() => {
     void (async () => {
@@ -21,9 +22,8 @@ function SettingsScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>Settings</Text>
       <Text>Configure NotMetronome defaults here.</Text>
-      <Text>Audio state: {audioState}</Text>
+      <Text>Audio state: {displayAudioState}</Text>
       <Text>Last action: {lastAction}</Text>
-      {audioDetails ? <Text>Audio details: {audioDetails}</Text> : null}
       <Button title="Test Beep" onPress={handleTestBeep} />
     </View>
   );
