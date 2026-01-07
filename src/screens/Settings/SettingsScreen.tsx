@@ -1,15 +1,16 @@
 import { useCallback, useState } from "react";
 import { Button, StyleSheet, Text, View } from "react-native";
 
-import { AudioState, useMetronomeAudio } from "../../audio/useMetronomeAudio";
+import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
 
 function SettingsScreen() {
   const { testBeep, audioState, audioDetails } = useMetronomeAudio({
     bpm: 120,
     meter: { n: 4, d: 4 },
+    enableScheduling: false,
   });
   const [lastAction, setLastAction] = useState<string>("OK - idle");
-  const displayAudioState: AudioState = audioState === "ready" || audioState === "error" || audioState === "suspended" ? audioState : "suspended";
+  const displayAudioState = audioState === "ready" || audioState === "error" || audioState === "suspended" ? audioState : "suspended";
 
   const handleTestBeep = useCallback(() => {
     void (async () => {

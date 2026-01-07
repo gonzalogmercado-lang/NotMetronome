@@ -1,28 +1,6 @@
-import { AccentLevel, Meter, TickInfo } from "../core/types";
-import { ACCENT_GAIN, deriveAccentPerTick } from "../utils/rhythm/deriveAccentPerTick";
-
-type AccentGainMap = Record<AccentLevel, number>;
-
-type StartOptions = {
-  bpm: number;
-  meter: Meter;
-  groups?: number[];
-};
-
-type UpdateOptions = StartOptions;
-
-export type ScheduledTick = TickInfo & {
-  accentLevel: AccentLevel;
-  accentGain: number;
-  scheduledTime: number;
-};
-
-type SchedulerEvents = {
-  onTick?: (tick: ScheduledTick) => void;
-  onStateChange?: (state: "ready" | "suspended" | "error", details?: string) => void;
-};
-
-type AudioContextLike = AudioContext | BaseAudioContext;
+import { AccentLevel } from "../../../core/types";
+import { ACCENT_GAIN, deriveAccentPerTick } from "../../../utils/rhythm/deriveAccentPerTick";
+import { AccentGainMap, AudioEngineDetails, AudioState, MetronomeAudioEngine, SchedulerEvents, StartOptions, UpdateOptions } from "../../AudioEngine";
 
 const LOOKAHEAD_MS = 25;
 const SCHEDULE_AHEAD_MS = 180;
@@ -43,40 +21,30 @@ const ACCENT_PEAK: Record<AccentLevel, number> = {
   WEAK: 0.4,
 };
 
-async function loadAudioContext(): Promise<AudioContextLike | null> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const audioApi = require("react-native-audio-api");
-    if (audioApi?.AudioContext) {
-      return new audioApi.AudioContext();
-    }
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn("[MetronomeAudioScheduler] react-native-audio-api unavailable, falling back to built-in AudioContext if present", error);
-  }
+type AudioContextLike = AudioContext | BaseAudioContext;
 
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function getWebAudioContext(): AudioContextLike | null {
   if (typeof globalThis.AudioContext !== "undefined") {
     return new AudioContext();
   }
   if (typeof globalThis.webkitAudioContext !== "undefined") {
     return new globalThis.webkitAudioContext();
   }
-
   return null;
 }
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-class MetronomeAudioScheduler {
+class WebMetronomeAudioEngine implements MetronomeAudioEngine {
   private context: AudioContextLike | null = null;
 
   private timerId: ReturnType<typeof setInterval> | null = null;
 
   private bpm = 120;
 
-  private meter: Meter = { n: 4, d: 4 };
+  private meter = { n: 4, d: 4 };
 
   private groups?: number[];
 
@@ -94,6 +62,10 @@ class MetronomeAudioScheduler {
 
   private scheduledNodes = new Map<OscillatorNode, GainNode>();
 
+  private state: AudioState = "suspended";
+
+  private details = "Audio context not initialized";
+
   constructor(events: SchedulerEvents = {}) {
     this.events = events;
   }
@@ -106,6 +78,14 @@ class MetronomeAudioScheduler {
     return SCHEDULE_AHEAD_MS / 1000;
   }
 
+  getDetails(): AudioEngineDetails {
+    return {
+      isAvailable: typeof globalThis.AudioContext !== "undefined" || typeof globalThis.webkitAudioContext !== "undefined",
+      state: this.state,
+      details: this.details,
+    };
+  }
+
   setAccentGains(map: Partial<AccentGainMap>) {
     this.accentGains = { ...this.accentGains, ...map };
   }
@@ -115,7 +95,7 @@ class MetronomeAudioScheduler {
     this.setFromOptions(options);
     await this.ensureContext();
     if (!this.context) {
-      this.events.onStateChange?.("error", "Audio context not available");
+      this.updateState("error", "Audio context not available");
       return false;
     }
     this.isRunning = true;
@@ -126,7 +106,7 @@ class MetronomeAudioScheduler {
     return true;
   }
 
-  async stop() {
+  stop() {
     if (this.timerId) {
       clearInterval(this.timerId);
       this.timerId = null;
@@ -141,7 +121,7 @@ class MetronomeAudioScheduler {
           osc.stop(now);
         } catch (error) {
           // eslint-disable-next-line no-console
-          console.warn("[MetronomeAudioScheduler] Unable to stop scheduled oscillator", error);
+          console.warn("[WebMetronomeAudioEngine] Unable to stop scheduled oscillator", error);
         } finally {
           osc.disconnect();
           gain.disconnect();
@@ -151,7 +131,7 @@ class MetronomeAudioScheduler {
     }
   }
 
-  async update(options: UpdateOptions) {
+  update(options: UpdateOptions) {
     this.setFromOptions(options);
     if (this.isRunning && this.context) {
       if (this.nextTickTime < this.context.currentTime) {
@@ -167,25 +147,33 @@ class MetronomeAudioScheduler {
     this.accentLevels = deriveAccentPerTick(this.meter, this.groups);
   }
 
+  private updateState(state: AudioState, details?: string) {
+    this.state = state;
+    this.details = details ?? "";
+    this.events.onStateChange?.(state, details);
+  }
+
   private async ensureContext() {
     if (this.context) {
-      if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
-        await (this.context as AudioContext).resume();
-        const currentState = "state" in this.context ? this.context.state : "unknown";
-        this.events.onStateChange?.(currentState === "suspended" ? "suspended" : "ready", `resume() called; state=${currentState}`);
-      }
+      await this.resumeIfSuspended("resume() called");
       return;
     }
-    this.context = await loadAudioContext();
+    this.context = getWebAudioContext();
     if (!this.context) {
-      this.events.onStateChange?.("error", "No AudioContext available");
+      this.updateState("error", "No Web Audio context available");
       return;
     }
+    await this.resumeIfSuspended("context created");
+  }
+
+  private async resumeIfSuspended(reason: string) {
+    if (!this.context) return;
     if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
       await (this.context as AudioContext).resume();
     }
-    const createdState = "state" in this.context ? this.context.state : "unknown";
-    this.events.onStateChange?.(createdState === "suspended" ? "suspended" : "ready", `context created; state=${createdState}`);
+    const state = "state" in this.context ? this.context.state : "unknown";
+    const details = `${reason}; state=${state}`;
+    this.updateState(state === "suspended" ? "suspended" : "ready", details);
   }
 
   private scheduleWindow() {
@@ -205,7 +193,7 @@ class MetronomeAudioScheduler {
     const accentGain = this.accentGains[accentLevel] ?? 1;
     this.scheduleClick(atTime, accentLevel, accentGain);
 
-    const tick: ScheduledTick = {
+    this.events.onTick?.({
       tickIndex: this.tickIndex,
       atMs: atTime * 1000,
       barTick: this.tickIndex % this.meter.n,
@@ -213,9 +201,7 @@ class MetronomeAudioScheduler {
       accentGain,
       accentLevel,
       scheduledTime: atTime,
-    };
-
-    this.events.onTick?.(tick);
+    });
     this.tickIndex += 1;
   }
 
@@ -248,10 +234,11 @@ class MetronomeAudioScheduler {
     };
   }
 
-  async playTestBeep(): Promise<{ ok: boolean; details?: string }> {
+  async playTestBeep() {
     await this.ensureContext();
-    if (!this.context) return { ok: false, details: "Audio context not available" };
-
+    if (!this.context) {
+      return { ok: false, details: "Audio context not available" };
+    }
     if ("state" in this.context && this.context.state === "suspended" && "resume" in this.context && typeof this.context.resume === "function") {
       await (this.context as AudioContext).resume();
     }
@@ -272,4 +259,4 @@ class MetronomeAudioScheduler {
   }
 }
 
-export default MetronomeAudioScheduler;
+export default WebMetronomeAudioEngine;
