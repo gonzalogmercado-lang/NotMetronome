@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
@@ -13,6 +13,10 @@ import { ACCENT_GAIN, accentPatternGlyphs } from "../../utils/rhythm/deriveAccen
 import StatRow from "./components/StatRow";
 
 function HomeScreen() {
+  useEffect(() => {
+    console.log("[HOME NEW MOUNTED] src/screens/Home/HomeScreen.tsx", { stamp: "2026-01-07-B" });
+  }, []);
+
   const { bpm, increment, decrement, tap } = useTempoStore();
   const { meter, setMeter, groups, setGroups, resetGroups, claveEnabled, claveMode, setClaveEnabled, setClaveMode } = useMeterStore();
   const { addFromCurrent } = useSavedBarsStore();
@@ -98,6 +102,13 @@ function HomeScreen() {
 
   return (
     <View style={styles.container}>
+      <Text style={styles.runtimeStamp}>RUNTIME: HOME_NEW | STAMP: 2026-01-07-B</Text>
+      {__DEV__ ? (
+        <View style={styles.diagnosticBanner}>
+          <Text style={styles.diagnosticBannerText}>HOME NEW (src/screens/Home/HomeScreen.tsx) - CLAVE ENABLED UI</Text>
+          <Text style={styles.diagnosticBannerStamp}>STAMP: 2026-01-07-A</Text>
+        </View>
+      ) : null}
       <Text style={styles.title}>NotMetronome</Text>
       <Text style={styles.statusNote}>{audioStatusLabel}</Text>
 
@@ -245,6 +256,27 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 24,
     gap: 16,
+  },
+  runtimeStamp: {
+    fontSize: 11,
+    color: "#444",
+  },
+  diagnosticBanner: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#2b6",
+    backgroundColor: "#e9fff1",
+    gap: 4,
+  },
+  diagnosticBannerText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#145c2d",
+  },
+  diagnosticBannerStamp: {
+    fontSize: 12,
+    color: "#145c2d",
   },
   title: {
     fontSize: 28,
