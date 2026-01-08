@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["NotmetronomeAudioEngineModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.notmetronomeaudioengine.NotmetronomeAudioEngineModule"]
+  }
+}

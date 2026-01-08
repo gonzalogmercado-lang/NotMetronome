@@ -1,4 +1,4 @@
-import { createNativeStackNavigator } from "@react-navigation/native-stack";
+﻿import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import TabsNavigator from "./TabsNavigator";
 
@@ -10,10 +10,11 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function RootNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator id="root-stack" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Tabs" component={TabsNavigator} />
     </Stack.Navigator>
   );
 }
 
 export default RootNavigator;
+

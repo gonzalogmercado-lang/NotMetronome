@@ -1,4 +1,4 @@
-export type Meter = {
+﻿export type Meter = {
   n: number;
   d: number;
 };
@@ -14,4 +14,10 @@ export type ClockEvents = {
   onTick?: (info: TickInfo) => void;
 };
 
-export type AccentLevel = "BAR" | "GROUP" | "WEAK";
+/**
+ * Accent contract (canonical)
+ * - BAR_STRONG: acento de compás
+ * - GROUP_MED: acento de inicio de grupo (clave)
+ * - SUBDIV_WEAK: resto
+ */
+export type AccentLevel = "BAR_STRONG" | "GROUP_MED" | "SUBDIV_WEAK";

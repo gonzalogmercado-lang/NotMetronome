@@ -1,0 +1,10 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "notmetronome-audio-engine": ["../src/index"],
+      "notmetronome-audio-engine/*": ["../src/*"]
+    }
+  }
+}

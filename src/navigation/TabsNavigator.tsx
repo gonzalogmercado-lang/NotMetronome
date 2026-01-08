@@ -1,4 +1,4 @@
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+﻿import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 
 import CreatorScreen from "../screens/Creator/CreatorScreen";
 import HomeScreen from "../screens/Home/HomeScreen";
@@ -14,7 +14,7 @@ const Tab = createBottomTabNavigator<TabsParamList>();
 
 function TabsNavigator() {
   return (
-    <Tab.Navigator>
+    <Tab.Navigator id="root-tabs">
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Creator" component={CreatorScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
@@ -23,3 +23,5 @@ function TabsNavigator() {
 }
 
 export default TabsNavigator;
+
+

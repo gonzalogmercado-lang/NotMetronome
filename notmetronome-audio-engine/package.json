@@ -1,0 +1,41 @@
+{
+  "name": "notmetronome-audio-engine",
+  "version": "0.1.0",
+  "description": "Sample-accurate metronome audio engine (AAudio/Oboe) for NotMetronome",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "scripts": {
+    "build": "expo-module build",
+    "clean": "expo-module clean",
+    "lint": "expo-module lint",
+    "test": "expo-module test",
+    "prepublishOnly": "expo-module prepublishOnly",
+    "expo-module": "expo-module",
+    "open:ios": "xed example/ios",
+    "open:android": "open -a \"Android Studio\" example/android"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "notmetronome-audio-engine",
+    "NotmetronomeAudioEngine"
+  ],
+  "repository": "https://example.com/notmetronome-audio-engine",
+  "bugs": {
+    "url": "https://example.com/notmetronome-audio-engine/issues"
+  },
+  "author": "Gonzalo Mercado <TU_MAIL@algo.com> ()",
+  "license": "MIT",
+  "homepage": "https://example.com/notmetronome-audio-engine#readme",
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "expo": "^54.0.27",
+    "expo-module-scripts": "^5.0.8",
+    "react-native": "0.81.5"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}
