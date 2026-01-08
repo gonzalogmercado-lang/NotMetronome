@@ -9,3 +9,7 @@ build-tests/
 
 expo-env.d.ts
 # @end expo-cli
+
+# Android debug keystore (local only)
+android/app/debug.keystore
+
