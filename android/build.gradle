@@ -22,3 +22,16 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+
+// --- FIX: ExpoModulesPackageList.java references our module class,
+// so :expo must have it on the compile classpath.
+gradle.projectsEvaluated {
+  def expoProj = rootProject.findProject(":expo")
+  def nmAudio = rootProject.findProject(":notmetronome-audio-engine")
+  if (expoProj != null && nmAudio != null) {
+    expoProj.dependencies {
+      implementation project(":notmetronome-audio-engine")
+    }
+  }
+}

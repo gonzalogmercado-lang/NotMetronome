@@ -1,4 +1,4 @@
-package expo.modules.notmetronomeaudioengine
+﻿package expo.modules.notmetronomeaudioengine
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -268,16 +268,38 @@ class NotmetronomeAudioEngineModule : Module() {
   }
 
   private fun computeGroupStarts(meterN: Int, groups: IntArray): BooleanArray {
-    val starts = BooleanArray(meterN) { false }
-    if (meterN <= 0) return starts
-    if (groups.isEmpty()) return starts
+    val n = meterN.coerceAtLeast(1)
+    val starts = BooleanArray(n) { false }
+    starts[0] = true
 
+    // Normalize groups to avoid invalid states / races:
+    // - remove non-positive
+    // - truncate if it would overflow bar
+    // - pad with remainder if short
+    val cleaned = groups.filter { it > 0 }.toMutableList()
+    if (cleaned.isEmpty()) cleaned.add(n)
+
+    val normalized = mutableListOf<Int>()
     var acc = 0
-    for (g in groups) {
-      if (acc in 1 until meterN) starts[acc] = true
-      acc += g
-      if (acc >= meterN) break
+    for (g in cleaned) {
+      if (acc >= n) break
+      val take = g.coerceAtMost(n - acc)
+      if (take > 0) {
+        normalized.add(take)
+        acc += take
+      }
     }
+    if (acc < n) normalized.add(n - acc)
+
+    var pos = 0
+    for (g in normalized) {
+      pos += g
+      // IMPORTANT: do not mark the bar boundary (pos == n), only in-bar indices 0..n-1
+      if (pos in 0 until n) {
+        starts[pos] = true
+      }
+    }
+
     return starts
   }
 
@@ -402,3 +424,4 @@ class NotmetronomeAudioEngineModule : Module() {
     }
   }
 }
+
