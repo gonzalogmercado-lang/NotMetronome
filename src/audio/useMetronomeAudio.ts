@@ -8,9 +8,14 @@ export type MetronomeStartInput = {
   bpm: number;
   meter: Meter;
   groups?: number[];
-  // subdivisions (solo tiene efecto si meter.d === 4 en el scheduler)
+
+  // Legacy global subdivisions (native supports)
   subdiv?: number; // 1..8
   subdivMask?: boolean[]; // length === subdiv
+
+  // NEW: per-beat subdivisions + masks (goal state)
+  pulseSubdivs?: number[]; // length === meter.n
+  pulseSubdivMasks?: boolean[][]; // [beatIndex][slotIndex]
 };
 
 type UseMetronomeAudioOptions = MetronomeStartInput & {
@@ -19,7 +24,17 @@ type UseMetronomeAudioOptions = MetronomeStartInput & {
 };
 
 export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
-  const { bpm, meter, groups, subdiv, subdivMask, onTick, accentGains } = options;
+  const {
+    bpm,
+    meter,
+    groups,
+    subdiv,
+    subdivMask,
+    pulseSubdivs,
+    pulseSubdivMasks,
+    onTick,
+    accentGains,
+  } = options;
 
   const schedulerRef = useRef<MetronomeAudioScheduler | null>(null);
   const [audioState, setAudioState] = useState<"idle" | "ready" | "error" | "starting">("idle");
@@ -44,8 +59,16 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
   }, [accentMap]);
 
   useEffect(() => {
-    schedulerRef.current?.update({ bpm, meter, groups, subdiv, subdivMask });
-  }, [bpm, groups, meter, subdiv, subdivMask]);
+    schedulerRef.current?.update({
+      bpm,
+      meter,
+      groups,
+      subdiv,
+      subdivMask,
+      pulseSubdivs,
+      pulseSubdivMasks,
+    });
+  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks]);
 
   useEffect(
     () => () => {
@@ -56,9 +79,17 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
 
   const start = useCallback(async () => {
     setAudioState((prev) => (prev === "ready" ? prev : "starting"));
-    const result = await schedulerRef.current?.start({ bpm, meter, groups, subdiv, subdivMask });
+    const result = await schedulerRef.current?.start({
+      bpm,
+      meter,
+      groups,
+      subdiv,
+      subdivMask,
+      pulseSubdivs,
+      pulseSubdivMasks,
+    });
     return result ?? false;
-  }, [bpm, groups, meter, subdiv, subdivMask]);
+  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks]);
 
   const stop = useCallback(() => {
     setLastTick(null);

@@ -11,11 +11,13 @@ type StartOptions = {
   meter: Meter;
   groups?: number[];
 
-  // Subdivisions sobre negras (solo cuando meter.d === 4)
-  // subdiv = 1..8 (cuántos golpes entran en una negra)
-  // subdivMask = qué golpes suenan dentro del grupo (length === subdiv)
+  // Legacy global subdivisions (works for ANY denominator on native engine)
   subdiv?: number;
   subdivMask?: boolean[];
+
+  // NEW per-beat subdivisions (web supports; native currently ignores)
+  pulseSubdivs?: number[];
+  pulseSubdivMasks?: boolean[][];
 };
 
 type UpdateOptions = StartOptions & {
@@ -78,9 +80,13 @@ type NativeEngineModule = {
     sampleRate?: number;
     applyAt?: "bar" | "now";
 
-    // subdivisions (Android engine puede ignorarlo por ahora; lo cableamos ya)
+    // legacy (native consumes this today)
     subdiv?: number;
     subdivMask?: boolean[];
+
+    // NEW (native may ignore today)
+    pulseSubdivs?: number[];
+    pulseSubdivMasks?: boolean[][];
   }): Promise<void>;
 
   stop(): Promise<void>;
@@ -93,9 +99,11 @@ type NativeEngineModule = {
     sampleRate?: number;
     applyAt?: "bar" | "now";
 
-    // subdivisions
     subdiv?: number;
     subdivMask?: boolean[];
+
+    pulseSubdivs?: number[];
+    pulseSubdivMasks?: boolean[][];
   }): Promise<void>;
 
   getStatus(): Promise<string>;
@@ -144,11 +152,35 @@ function clampInt(value: number, min: number, max: number) {
 function normalizeSubdivMask(subdiv: number, mask?: boolean[]) {
   const n = clampInt(subdiv, 1, 8);
   const base = Array.from({ length: n }).map((_, i) => (mask?.[i] ?? true));
-  // no permitimos "todo apagado" (si viene así, prendemos el 1)
-  if (!base.some(Boolean)) {
-    base[0] = true;
-  }
+  if (!base.some(Boolean)) base[0] = true;
   return base;
+}
+
+function normalizePulseSubdivs(meterN: number, pulseSubdivs?: number[]) {
+  const n = Math.max(1, meterN);
+  if (!pulseSubdivs || pulseSubdivs.length === 0) return undefined;
+  const out = Array.from({ length: n }).map((_, i) =>
+    clampInt(pulseSubdivs[i] ?? pulseSubdivs[pulseSubdivs.length - 1] ?? 1, 1, 8)
+  );
+  return out;
+}
+
+function normalizePulseMasks(meterN: number, pulseSubdivs: number[], pulseMasks?: boolean[][]) {
+  const n = Math.max(1, meterN);
+  const out: boolean[][] = [];
+  for (let i = 0; i < n; i++) {
+    const subdiv = clampInt(pulseSubdivs[i] ?? 1, 1, 8);
+    const mask = pulseMasks?.[i];
+    out.push(normalizeSubdivMask(subdiv, mask));
+  }
+  return out;
+}
+
+function maxInt(arr?: number[]) {
+  if (!arr || arr.length === 0) return undefined;
+  let m = arr[0] ?? 1;
+  for (let i = 1; i < arr.length; i++) m = Math.max(m, arr[i] ?? 1);
+  return m;
 }
 
 // =====================================================
@@ -169,9 +201,13 @@ class MetronomeAudioScheduler {
   private meter: Meter = { n: 4, d: 4 };
   private groups?: number[];
 
-  // Subdivisions (solo sobre negras)
+  // Global (legacy) subdivisions
   private subdiv = 1; // 1..8
   private subdivMask: boolean[] = [true];
+
+  // NEW: per-beat (web uses; native currently ignores)
+  private pulseSubdivs?: number[];
+  private pulseSubdivMasks?: boolean[][];
 
   private accentLevels: AccentLevel[] = deriveAccentPerTick(this.meter, this.groups);
   private accentGains: AccentGainMap = ACCENT_GAIN;
@@ -189,7 +225,6 @@ class MetronomeAudioScheduler {
   }
 
   private get secondsPerTick() {
-    // Base grid: denominator ticks
     return (60 / this.bpm) * (4 / this.meter.d);
   }
 
@@ -206,11 +241,19 @@ class MetronomeAudioScheduler {
 
     this.setFromOptions(options);
 
-    // Prefer native on Android
     if (this.native) {
       try {
         this.attachNativeListenersIfNeeded();
         this.isRunning = true;
+
+        const hasPulse = !!(this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n);
+
+        // Native TODAY consumes only legacy subdiv/subdivMask.
+        // If pulseSubdivs is present, use a GLOBAL audible subdiv:
+        // take the MAX (so it definitely subdivides) and all-true mask.
+        const pulseMax = hasPulse ? maxInt(this.pulseSubdivs) : undefined;
+        const legacySubdiv = clampInt(pulseMax ?? this.subdiv ?? 1, 1, 8);
+        const legacyMask = normalizeSubdivMask(legacySubdiv, undefined);
 
         await this.native.start({
           bpm: this.bpm,
@@ -218,9 +261,12 @@ class MetronomeAudioScheduler {
           meterD: this.meter.d,
           groups: this.groups,
 
-          // subdivisions (engine Android lo soporta en el próximo paso)
-          subdiv: this.meter.d === 4 ? this.subdiv : 1,
-          subdivMask: this.meter.d === 4 ? this.subdivMask : [true],
+          // Future-proof keys (native may ignore today)
+          ...(hasPulse ? { pulseSubdivs: this.pulseSubdivs, pulseSubdivMasks: this.pulseSubdivMasks } : {}),
+
+          // Guaranteed audible path on Android today
+          subdiv: legacySubdiv,
+          subdivMask: legacyMask,
         });
 
         this.events.onStateChange?.("ready");
@@ -232,7 +278,7 @@ class MetronomeAudioScheduler {
       }
     }
 
-    // WebAudio fallback (web only)
+    // WebAudio fallback
     await this.ensureWebContext();
     if (!this.context) {
       this.events.onStateChange?.("error", "Audio context not available");
@@ -250,7 +296,6 @@ class MetronomeAudioScheduler {
   }
 
   async stop() {
-    // Native stop
     if (this.native) {
       try {
         await this.native.stop();
@@ -263,7 +308,6 @@ class MetronomeAudioScheduler {
       return;
     }
 
-    // WebAudio stop
     if (this.timerId) {
       clearInterval(this.timerId);
       this.timerId = null;
@@ -296,10 +340,14 @@ class MetronomeAudioScheduler {
   async update(options: UpdateOptions) {
     this.setFromOptions(options);
 
-    // Native update
     if (this.native) {
       const applyAt = options.applyAt ?? "now";
       try {
+        const hasPulse = !!(this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n);
+        const pulseMax = hasPulse ? maxInt(this.pulseSubdivs) : undefined;
+        const legacySubdiv = clampInt(pulseMax ?? this.subdiv ?? 1, 1, 8);
+        const legacyMask = normalizeSubdivMask(legacySubdiv, undefined);
+
         await this.native.update({
           bpm: this.bpm,
           meterN: this.meter.n,
@@ -307,8 +355,10 @@ class MetronomeAudioScheduler {
           groups: this.groups,
           applyAt,
 
-          subdiv: this.meter.d === 4 ? this.subdiv : 1,
-          subdivMask: this.meter.d === 4 ? this.subdivMask : [true],
+          ...(hasPulse ? { pulseSubdivs: this.pulseSubdivs, pulseSubdivMasks: this.pulseSubdivMasks } : {}),
+
+          subdiv: legacySubdiv,
+          subdivMask: legacyMask,
         });
       } catch {
         // ignore
@@ -316,7 +366,6 @@ class MetronomeAudioScheduler {
       return;
     }
 
-    // WebAudio update
     if (this.isRunning && this.context) {
       if (this.nextTickTime < this.context.currentTime) {
         this.nextTickTime = this.context.currentTime + this.secondsPerTick;
@@ -329,14 +378,19 @@ class MetronomeAudioScheduler {
     this.meter = options.meter;
     this.groups = options.groups;
 
-    // Subdivisions rule: SOLO sobre negras (denominador 4)
-    if (this.meter.d === 4) {
-      const nextSubdiv = clampInt(options.subdiv ?? 1, 1, 8);
-      this.subdiv = nextSubdiv;
-      this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask);
+    // Keep legacy subdiv ALWAYS (native uses it for any denominator)
+    const nextSubdiv = clampInt(options.subdiv ?? 1, 1, 8);
+    this.subdiv = nextSubdiv;
+    this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask);
+
+    // Per-beat only when provided (web uses it)
+    const ps = normalizePulseSubdivs(this.meter.n, options.pulseSubdivs);
+    if (ps) {
+      this.pulseSubdivs = ps;
+      this.pulseSubdivMasks = normalizePulseMasks(this.meter.n, ps, options.pulseSubdivMasks);
     } else {
-      this.subdiv = 1;
-      this.subdivMask = [true];
+      this.pulseSubdivs = undefined;
+      this.pulseSubdivMasks = undefined;
     }
 
     this.accentLevels = deriveAccentPerTick(this.meter, this.groups);
@@ -416,35 +470,37 @@ class MetronomeAudioScheduler {
     const accentLevel = this.accentLevels[this.tickIndex % this.accentLevels.length] ?? "SUBDIV_WEAK";
     const accentGain = this.accentGains[accentLevel] ?? 1;
 
-    // === AUDIO ===
-    // Si hay subdivisiones (solo d=4), hacemos "grupo" dentro de esta negra.
-    if (this.meter.d === 4 && this.subdiv > 1) {
-      const secondsPerSub = this.secondsPerTick / this.subdiv;
+    const barTick = this.tickIndex % this.meter.n;
 
-      for (let i = 0; i < this.subdiv; i++) {
-        if (!this.subdivMask[i]) continue;
+    const beatSubdiv =
+      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
+        ? clampInt(this.pulseSubdivs[barTick] ?? 1, 1, 8)
+        : this.subdiv;
 
+    const beatMask =
+      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
+        ? normalizeSubdivMask(beatSubdiv, this.pulseSubdivMasks?.[barTick])
+        : normalizeSubdivMask(beatSubdiv, this.subdivMask);
+
+    if (beatSubdiv > 1) {
+      const secondsPerSub = this.secondsPerTick / beatSubdiv;
+
+      for (let i = 0; i < beatSubdiv; i++) {
+        if (!beatMask[i]) continue;
         const t = atTime + i * secondsPerSub;
-
-        // Importante: mantenemos 3 intensidades
-        // - slot 0 hereda el acento del pulso (bar/group/weak)
-        // - slots > 0 siempre SUBDIV_WEAK
         const level: AccentLevel = i === 0 ? accentLevel : "SUBDIV_WEAK";
         const gain = i === 0 ? accentGain : 1;
-
         this.scheduleClick(t, level, gain);
       }
     } else {
-      // normal: un click por tick
       this.scheduleClick(atTime, accentLevel, accentGain);
     }
 
-    // === EVENT === (base tick; no spameamos eventos por subdivisiones)
     const tick: ScheduledTick = {
       tickIndex: this.tickIndex,
       atMs: atTime * 1000,
-      barTick: this.tickIndex % this.meter.n,
-      isDownbeat: this.tickIndex % this.meter.n === 0,
+      barTick,
+      isDownbeat: barTick === 0,
       accentGain,
       accentLevel,
       scheduledTime: atTime,
@@ -489,7 +545,6 @@ class MetronomeAudioScheduler {
   }
 
   async playTestBeep() {
-    // Native: no-op true (engine tick should be audible when started)
     if (this.native) return true;
 
     await this.ensureWebContext();

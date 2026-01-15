@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Button, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+﻿import { useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
 import ClaveButton from "../../components/domain/ClaveButton";
@@ -8,63 +8,63 @@ import { TickInfo } from "../../core/types";
 import { useMeterStore } from "../../store/meter.store";
 import { useTempoStore } from "../../store/tempo.store";
 import { useUiStore } from "../../store/ui.store";
-import { ACCENT_GAIN, accentPatternGlyphs } from "../../utils/rhythm/deriveAccentPerTick";
+import { accentPatternGlyphs } from "../../utils/rhythm/deriveAccentPerTick";
 import StatRow from "./components/StatRow";
 
 function HomeScreen() {
   const { bpm, increment, decrement, tap } = useTempoStore();
-  const { meter, setMeter, groups, setGroups, clearGroups } = useMeterStore();
+  const {
+    meter,
+    setMeter,
+    groups,
+    setGroups,
+    clearGroups,
+    pulseSubdivs,
+    pulseSubdivMasks,
+    setPulseSubdiv,
+    setAllPulseSubdivs,
+    togglePulseSubdivMaskSlot,
+  } = useMeterStore();
   const { isPlaying, setPlaying, proMode, setProMode } = useUiStore();
 
   const [tickInfo, setTickInfo] = useState<TickInfo | null>(null);
   const [tickCount, setTickCount] = useState(0);
   const [isClaveOpen, setClaveOpen] = useState(false);
 
-  // -------------------------------------------------------
-  // Subdivisions (MVP UI): SOLO para negras (meter.d === 4)
-  // subdiv = cuántos "slots" entran en una negra: 1..8
-  // subdivMask = cuáles slots suenan dentro del grupo
-  // -------------------------------------------------------
-  const [subdiv, setSubdiv] = useState(1);
-  const [subdivMask, setSubdivMask] = useState<boolean[]>([true]);
+  // Subdivisions: por ahora UI habilitada solo si denominador 4 (subdivisiones sobre negras)
+  const isSubdivEnabled = meter.d === 4;
 
-  const setSubdivSafe = (next: number) => {
-    const n = Math.max(1, Math.min(8, next));
-    setSubdiv(n);
-    setSubdivMask((prev) => {
-      if (prev.length === n) return prev;
+  const [selectedBeat, setSelectedBeat] = useState(0);
 
-      if (prev.length < n) {
-        return [...prev, ...Array(n - prev.length).fill(true)];
-      }
-
-      const sliced = prev.slice(0, n);
-      return sliced.some(Boolean) ? sliced : [true, ...Array(n - 1).fill(false)];
-    });
+  const cycleSubdiv = (value: number) => {
+    const v = Math.max(1, Math.min(8, Math.floor(value)));
+    return v === 8 ? 1 : v + 1;
   };
 
-  const toggleSubdivSlot = (idx: number) => {
-    setSubdivMask((prev) => {
-      const next = [...prev];
-      next[idx] = !next[idx];
-      // No permitir "todo apagado" (si apaga todo, no aplicamos cambio)
-      if (!next.some(Boolean)) return prev;
-      return next;
-    });
-  };
+  const meterLabel = useMemo(() => `${meter.n}/${meter.d}`, [meter]);
+
+  const shouldShowClave = useMemo(() => {
+    // Clave visible en compases irregulares o si Pro mode está activado
+    return proMode || meter.n !== 4 || meter.d !== 4;
+  }, [meter, proMode]);
 
   const { start: startClock, stop: stopClock, lastTick, accentLevels, audioState } = useMetronomeAudio({
     bpm,
     meter,
     groups,
-    // ✅ CABLEADO: la UI ahora manda subdivisiones al engine
-    subdiv,
-    subdivMask,
+
+    // ✅ lo que querés: per-beat subdiv + per-beat mask
+    pulseSubdivs: isSubdivEnabled ? pulseSubdivs : undefined,
+    pulseSubdivMasks: isSubdivEnabled ? pulseSubdivMasks : undefined,
+
     onTick: (info) => {
       setTickCount((prev) => prev + 1);
       setTickInfo(info);
     },
   });
+
+  // ✅ FIX TS2554: accentPatternGlyphs espera 1 arg (accentLevels), no (meter, groups)
+  const accentGlyphs = useMemo(() => accentPatternGlyphs(accentLevels), [accentLevels]);
 
   const handleStartStop = async () => {
     if (isPlaying) {
@@ -83,248 +83,321 @@ function HomeScreen() {
   const changeTop = (delta: number) => {
     const next = Math.max(1, meter.n + delta);
     setMeter(next, meter.d);
+    setSelectedBeat(0);
   };
 
-  const changeBottom = (nextBottom: number) => {
-    if (meter.d === nextBottom) return;
-    setMeter(meter.n, nextBottom);
+  const setDenom = (d: number) => {
+    setMeter(meter.n, d);
+    setSelectedBeat(0);
   };
 
-  const accentGlyphs = useMemo(() => accentPatternGlyphs(accentLevels), [accentLevels]);
-  const accentGains = useMemo(() => accentLevels.map((level) => ACCENT_GAIN[level]), [accentLevels]);
+  const beatCount = Math.max(1, meter.n);
+  const safeSelectedBeat = Math.max(0, Math.min(beatCount - 1, selectedBeat));
 
-  const currentAccentLevel = lastTick?.accentLevel ?? (tickInfo ? accentLevels[tickInfo.barTick] : undefined);
-  const currentAccentGain = lastTick?.accentGain ?? (currentAccentLevel ? ACCENT_GAIN[currentAccentLevel] : undefined);
+  const selectedSubdiv = isSubdivEnabled ? pulseSubdivs?.[safeSelectedBeat] ?? 1 : 1;
 
-  const shouldShowClave = proMode || ((meter.d === 8 || meter.d === 16) && [5, 7, 11, 13, 15].includes(meter.n));
-  const meterLabel = `${meter.n}/${meter.d}`;
-  const audioStatusLabel =
-    audioState === "ready"
-      ? "Audio: armado con react-native-audio-api"
-      : audioState === "error"
-      ? "Audio: no disponible"
-      : "Audio: inicializando";
+  // máscara visible: si no hay guardada, default all-true del largo correcto
+  const selectedMask = useMemo(() => {
+    if (!isSubdivEnabled) return [true];
 
-  const isSubdivEnabled = meter.d === 4;
+    const raw = pulseSubdivMasks?.[safeSelectedBeat];
+    const len = Math.max(1, Math.min(8, selectedSubdiv));
+
+    if (!raw || raw.length !== len) {
+      return Array.from({ length: len }).map(() => true);
+    }
+    return raw;
+  }, [isSubdivEnabled, pulseSubdivMasks, safeSelectedBeat, selectedSubdiv]);
 
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>NotMetronome</Text>
-      <Text style={styles.statusNote}>{audioStatusLabel}</Text>
 
+      <Text style={styles.smallMuted}>Audio: {audioState}</Text>
+
+      {/* Tempo */}
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Tempo</Text>
-        <View style={styles.bpmRow}>
-          <Button title="-" onPress={decrement} />
-          <Text style={styles.bpmValue}>{bpm} BPM</Text>
-          <Button title="+" onPress={increment} />
+        <View style={styles.rowBetween}>
+          <Pressable style={styles.smallBtn} onPress={decrement}>
+            <Text style={styles.smallBtnText}>-</Text>
+          </Pressable>
+
+          <Text style={styles.bigValue}>{bpm} BPM</Text>
+
+          <Pressable style={styles.smallBtn} onPress={increment}>
+            <Text style={styles.smallBtnText}>+</Text>
+          </Pressable>
         </View>
-        <Button title={isPlaying ? "Stop" : "Start"} onPress={handleStartStop} />
-        <Button title="Tap Tempo" onPress={tap} />
+
+        <View style={{ marginTop: 10 }}>
+          <Pressable style={[styles.primaryBtn, isPlaying && styles.primaryBtnStop]} onPress={handleStartStop}>
+            <Text style={styles.primaryBtnText}>{isPlaying ? "STOP" : "START"}</Text>
+          </Pressable>
+
+          <Pressable style={[styles.primaryBtn, { marginTop: 10 }]} onPress={tap}>
+            <Text style={styles.primaryBtnText}>TAP TEMPO</Text>
+          </Pressable>
+        </View>
       </View>
 
+      {/* Meter */}
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Meter</Text>
-        <View style={styles.meterRow}>
-          <Button title="-" onPress={() => changeTop(-1)} />
-          <Text style={styles.bpmValue}>{meterLabel}</Text>
-          <Button title="+" onPress={() => changeTop(1)} />
+
+        <View style={styles.rowBetween}>
+          <Pressable style={styles.smallBtn} onPress={() => changeTop(-1)}>
+            <Text style={styles.smallBtnText}>-</Text>
+          </Pressable>
+
+          <Text style={styles.bigValue}>{meterLabel}</Text>
+
+          <Pressable style={styles.smallBtn} onPress={() => changeTop(+1)}>
+            <Text style={styles.smallBtnText}>+</Text>
+          </Pressable>
         </View>
 
-        <View style={styles.denomRow}>
-          {[4, 8, 16].map((value) => {
-            const selected = meter.d === value;
-            return (
-              <Pressable
-                key={value}
-                style={[styles.denomOption, selected && styles.denomOptionActive]}
-                onPress={() => changeBottom(value)}
-              >
-                <Text style={selected ? styles.denomTextActive : styles.denomText}>{value}</Text>
-              </Pressable>
-            );
-          })}
+        <View style={[styles.row, { marginTop: 10, gap: 10 }]}>
+          {[4, 8, 16].map((d) => (
+            <Pressable key={d} style={[styles.pill, meter.d === d && styles.pillActive]} onPress={() => setDenom(d)}>
+              <Text style={[styles.pillText, meter.d === d && styles.pillTextActive]}>{d}</Text>
+            </Pressable>
+          ))}
         </View>
+      </View>
 
-        {/* Subdivisions UI (MVP) */}
-        <View style={{ marginTop: 8 }}>
-          <Text style={styles.sectionLabel}>Subdivisions</Text>
+      {/* Subdivisions */}
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>Subdivisions</Text>
 
-          {!isSubdivEnabled ? (
-            <Text style={styles.helperText}>Disponible solo con denominador 4 (subdivisiones sobre negras).</Text>
-          ) : (
-            <>
-              <Text style={styles.helperText}>Cuántas notas entran en una negra (1..8):</Text>
-              <View style={styles.denomRow}>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => {
-                  const selected = subdiv === value;
-                  return (
-                    <Pressable
-                      key={value}
-                      style={[styles.denomOption, selected && styles.denomOptionActive]}
-                      onPress={() => setSubdivSafe(value)}
-                    >
-                      <Text style={selected ? styles.denomTextActive : styles.denomText}>{value}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              <View style={{ marginTop: 8 }}>
-                {subdiv === 1 ? (
-                  <Text style={styles.helperText}>1 = sin subdividir (solo pulso).</Text>
-                ) : (
-                  <>
-                    <Text style={styles.helperText}>Qué notas suenan dentro del grupo:</Text>
-                    <View style={styles.denomRow}>
-                      {Array.from({ length: subdiv }).map((_, i) => {
-                        const on = subdivMask[i] ?? true;
-                        return (
-                          <Pressable
-                            key={i}
-                            style={[styles.denomOption, on && styles.denomOptionActive]}
-                            onPress={() => toggleSubdivSlot(i)}
-                          >
-                            <Text style={on ? styles.denomTextActive : styles.denomText}>{i + 1}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                    <Text style={styles.helperText}>
-                      Tip: podés dejar solo “2” prendido si querés que suene solo el segundo golpe.
-                    </Text>
-                  </>
-                )}
-              </View>
-            </>
-          )}
-        </View>
-
-        <View style={styles.switchRow}>
-          <Text style={styles.sectionLabel}>Pro mode</Text>
-          <Switch value={proMode} onValueChange={setProMode} />
-        </View>
-
-        <StatRow label="Groups" value={groups && groups.length > 0 ? groups.join(" + ") : "None"} />
-        <StatRow label="Accent pattern" value={accentGlyphs} />
-
-        {shouldShowClave ? (
-          <>
-            <ClaveButton
-              meterLabel={meterLabel}
-              onPress={() => setClaveOpen(true)}
-              accentPreview={accentGlyphs}
-              footer={<Text>Editar agrupaciones</Text>}
-            />
-            <ClaveModal
-              visible={isClaveOpen}
-              meter={meter}
-              currentGroups={groups}
-              onRequestClose={() => setClaveOpen(false)}
-              onUpdateGroups={setGroups}
-              onClearGroups={clearGroups}
-            />
-          </>
+        {!isSubdivEnabled ? (
+          <Text style={styles.helperText}>Disponible solo con denominador 4 (subdivisiones sobre negras).</Text>
         ) : (
-          <Text style={styles.helperText}>Clave disponible para compases irregulares (o activa Pro mode)</Text>
+          <>
+            <Text style={styles.helperText}>
+              Beat Inspector: cada pulso tiene su subdivisión (tocá para cambiar) + máscara por beat (qué golpes suenan).
+            </Text>
+
+            <View style={styles.beatRow}>
+              {Array.from({ length: beatCount }).map((_, i) => {
+                const v = pulseSubdivs?.[i] ?? 1;
+                const isSel = i === safeSelectedBeat;
+                return (
+                  <Pressable
+                    key={i}
+                    style={[styles.beatTile, v > 1 && styles.beatTileActive, isSel && styles.beatTileSelected]}
+                    onPress={() => {
+                      setSelectedBeat(i);
+                      setPulseSubdiv(i, cycleSubdiv(v));
+                    }}
+                  >
+                    <Text style={v > 1 ? styles.beatTextActive : styles.beatText}>Beat {i + 1}</Text>
+                    <Text style={v > 1 ? styles.beatValueActive : styles.beatValue}>{v}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={{ flexDirection: "row", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+              <Pressable style={styles.smallAction} onPress={() => setAllPulseSubdivs(5)}>
+                <Text style={styles.smallActionText}>All = 5</Text>
+              </Pressable>
+              <Pressable style={styles.smallAction} onPress={() => setAllPulseSubdivs(3)}>
+                <Text style={styles.smallActionText}>All = 3</Text>
+              </Pressable>
+              <Pressable style={styles.smallAction} onPress={() => setAllPulseSubdivs(1)}>
+                <Text style={styles.smallActionText}>All = 1</Text>
+              </Pressable>
+            </View>
+
+            {/* Per-beat mask editor */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.helperText}>
+                Máscara del Beat {safeSelectedBeat + 1} (subdiv {selectedSubdiv}): encendé/apagá golpes.
+              </Text>
+
+              {selectedSubdiv <= 1 ? (
+                <Text style={styles.helperText}>Subdiv = 1 → no hay golpes internos para mutear.</Text>
+              ) : (
+                <View style={[styles.denomRow, { marginTop: 8 }]}>
+                  {Array.from({ length: selectedSubdiv }).map((_, idx) => {
+                    const on = selectedMask[idx] ?? true;
+                    return (
+                      <Pressable
+                        key={idx}
+                        style={[styles.denomOption, on && styles.denomOptionActive]}
+                        onPress={() => togglePulseSubdivMaskSlot(safeSelectedBeat, idx)}
+                      >
+                        <Text style={on ? styles.denomTextActive : styles.denomText}>{idx + 1}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+
+              {selectedSubdiv > 1 && (
+                <Text style={styles.helperText}>
+                  Ejemplo: en 5, dejá 1.0.1.0.1 para “tresillo raro” sin cambiar el subdiv.
+                </Text>
+              )}
+            </View>
+          </>
         )}
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionLabel}>Status</Text>
-        <StatRow label="Meter" value={meterLabel} />
-        <StatRow label="Ticks" value={tickCount} />
-        <StatRow label="Last tick index" value={tickInfo?.tickIndex ?? "-"} />
-        <StatRow label="Last tick at" value={tickInfo?.atMs ?? "-"} />
-        <StatRow label="Bar tick" value={tickInfo?.barTick ?? "-"} />
-        <StatRow label="Last downbeat" value={tickInfo ? (tickInfo.isDownbeat ? "Yes" : "No") : "-"} />
-        <StatRow label="Current accent" value={currentAccentLevel ? `${currentAccentLevel} (${currentAccentGain?.toFixed(2)})` : "-"} />
-        <StatRow label="Accent gains" value={accentGains.map((gain) => gain.toFixed(2)).join(" ")} />
-        <StatRow
-          label="Subdiv"
-          value={isSubdivEnabled ? `${subdiv} | mask: ${subdivMask.map((x) => (x ? "1" : "0")).join("")}` : "disabled"}
-        />
+      {/* Pro mode + stats */}
+      <View style={styles.switchRow}>
+        <Text style={styles.sectionLabel}>Pro mode</Text>
+        <Switch value={proMode} onValueChange={setProMode} />
       </View>
-    </View>
+
+      <StatRow label="Groups" value={groups && groups.length > 0 ? groups.join(" + ") : "None"} />
+      <StatRow label="Accent pattern" value={accentGlyphs} />
+
+      {shouldShowClave ? (
+        <>
+          <ClaveButton
+            meterLabel={meterLabel}
+            onPress={() => setClaveOpen(true)}
+            accentPreview={accentGlyphs}
+            footer={<Text>Editar agrupaciones</Text>}
+          />
+          <ClaveModal
+            visible={isClaveOpen}
+            meter={meter}
+            currentGroups={groups}
+            onRequestClose={() => setClaveOpen(false)}
+            onUpdateGroups={setGroups}
+            onClearGroups={clearGroups}
+          />
+        </>
+      ) : (
+        <Text style={styles.helperText}>Clave disponible para compases irregulares (o activa Pro mode)</Text>
+      )}
+
+      {/* Debug */}
+      <View style={{ marginTop: 12 }}>
+        <Text style={styles.smallMuted}>
+          tickCount={tickCount} lastTick={lastTick ? `${lastTick.tickIndex}@${Math.round(lastTick.atMs)}ms` : "null"}
+        </Text>
+        <Text style={styles.smallMuted}>
+          accents={accentLevels?.length ? accentLevels.slice(0, Math.min(32, accentLevels.length)).join(",") : "none"}
+        </Text>
+      </View>
+    </ScrollView>
   );
 }
 
+export default HomeScreen;
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 24,
-    gap: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-  },
-  statusNote: {
-    color: "#555",
-    fontSize: 12,
-    marginTop: -6,
-  },
+  container: { padding: 16, backgroundColor: "#fff", paddingBottom: 32 },
+  title: { fontSize: 28, fontWeight: "700", marginBottom: 8, color: "#111" },
+  smallMuted: { fontSize: 12, color: "#666" },
+
   card: {
+    backgroundColor: "#f3f3f3",
     borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
+    padding: 14,
+    marginTop: 12,
+  },
+
+  sectionLabel: { fontSize: 16, fontWeight: "700", color: "#111" },
+  helperText: { fontSize: 12, color: "#666", marginTop: 6 },
+
+  row: { flexDirection: "row", alignItems: "center" },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 10 },
+
+  bigValue: { fontSize: 22, fontWeight: "700", color: "#111" },
+
+  smallBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: "#1e88e5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  smallBtnText: { color: "#fff", fontSize: 20, fontWeight: "800" },
+
+  primaryBtn: {
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#1e88e5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  primaryBtnStop: { backgroundColor: "#1565c0" },
+  primaryBtnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+
+  pill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
     borderColor: "#ddd",
-    padding: 16,
-    gap: 12,
-    backgroundColor: "#fafafa",
   },
-  sectionLabel: {
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  bpmRow: {
+  pillActive: { backgroundColor: "#111", borderColor: "#111" },
+  pillText: { color: "#111", fontWeight: "700" },
+  pillTextActive: { color: "#fff" },
+
+  beatRow: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  meterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  bpmValue: {
-    fontSize: 22,
-    fontWeight: "700",
-  },
-  denomRow: {
-    flexDirection: "row",
-    gap: 12,
-    justifyContent: "flex-start",
-    alignItems: "center",
     flexWrap: "wrap",
+    gap: 10,
+    marginTop: 10,
   },
-  denomOption: {
+  beatTile: {
+    width: 120,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
+  },
+  beatTileActive: { borderColor: "#1e88e5" },
+  beatTileSelected: { borderColor: "#111", borderWidth: 2 },
+
+  beatText: { fontSize: 12, color: "#666" },
+  beatValue: { fontSize: 22, fontWeight: "800", color: "#111" },
+  beatTextActive: { fontSize: 12, color: "#1e88e5" },
+  beatValueActive: { fontSize: 22, fontWeight: "800", color: "#1e88e5" },
+
+  smallAction: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
   },
-  denomOptionActive: {
-    backgroundColor: "#222",
-    borderColor: "#222",
-  },
-  denomText: {
-    color: "#222",
-    fontWeight: "600",
-  },
-  denomTextActive: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  switchRow: {
+  smallActionText: { fontSize: 12, fontWeight: "800", color: "#111" },
+
+  denomRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 6,
+    flexWrap: "wrap",
+    gap: 8,
   },
-  helperText: {
-    color: "#777",
+  denomOption: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  denomOptionActive: { backgroundColor: "#111", borderColor: "#111" },
+  denomText: { color: "#111", fontWeight: "800" },
+  denomTextActive: { color: "#fff", fontWeight: "800" },
+
+  switchRow: {
+    marginTop: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
 });
-
-export default HomeScreen;
