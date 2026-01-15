@@ -1,5 +1,5 @@
-﻿import { Platform } from "react-native";
-import { requireNativeModule } from "expo";
+﻿import { requireNativeModule } from "expo";
+import { Platform } from "react-native";
 
 import { AccentLevel, Meter, TickInfo } from "../core/types";
 import { ACCENT_GAIN, deriveAccentPerTick } from "../utils/rhythm/deriveAccentPerTick";
@@ -10,6 +10,12 @@ type StartOptions = {
   bpm: number;
   meter: Meter;
   groups?: number[];
+
+  // Subdivisions sobre negras (solo cuando meter.d === 4)
+  // subdiv = 1..8 (cuántos golpes entran en una negra)
+  // subdivMask = qué golpes suenan dentro del grupo (length === subdiv)
+  subdiv?: number;
+  subdivMask?: boolean[];
 };
 
 type UpdateOptions = StartOptions & {
@@ -71,6 +77,10 @@ type NativeEngineModule = {
     groups?: number[];
     sampleRate?: number;
     applyAt?: "bar" | "now";
+
+    // subdivisions (Android engine puede ignorarlo por ahora; lo cableamos ya)
+    subdiv?: number;
+    subdivMask?: boolean[];
   }): Promise<void>;
 
   stop(): Promise<void>;
@@ -82,6 +92,10 @@ type NativeEngineModule = {
     groups?: number[];
     sampleRate?: number;
     applyAt?: "bar" | "now";
+
+    // subdivisions
+    subdiv?: number;
+    subdivMask?: boolean[];
   }): Promise<void>;
 
   getStatus(): Promise<string>;
@@ -123,6 +137,20 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
 
+function clampInt(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeSubdivMask(subdiv: number, mask?: boolean[]) {
+  const n = clampInt(subdiv, 1, 8);
+  const base = Array.from({ length: n }).map((_, i) => (mask?.[i] ?? true));
+  // no permitimos "todo apagado" (si viene así, prendemos el 1)
+  if (!base.some(Boolean)) {
+    base[0] = true;
+  }
+  return base;
+}
+
 // =====================================================
 
 class MetronomeAudioScheduler {
@@ -140,6 +168,10 @@ class MetronomeAudioScheduler {
   private bpm = 120;
   private meter: Meter = { n: 4, d: 4 };
   private groups?: number[];
+
+  // Subdivisions (solo sobre negras)
+  private subdiv = 1; // 1..8
+  private subdivMask: boolean[] = [true];
 
   private accentLevels: AccentLevel[] = deriveAccentPerTick(this.meter, this.groups);
   private accentGains: AccentGainMap = ACCENT_GAIN;
@@ -185,6 +217,10 @@ class MetronomeAudioScheduler {
           meterN: this.meter.n,
           meterD: this.meter.d,
           groups: this.groups,
+
+          // subdivisions (engine Android lo soporta en el próximo paso)
+          subdiv: this.meter.d === 4 ? this.subdiv : 1,
+          subdivMask: this.meter.d === 4 ? this.subdivMask : [true],
         });
 
         this.events.onStateChange?.("ready");
@@ -270,6 +306,9 @@ class MetronomeAudioScheduler {
           meterD: this.meter.d,
           groups: this.groups,
           applyAt,
+
+          subdiv: this.meter.d === 4 ? this.subdiv : 1,
+          subdivMask: this.meter.d === 4 ? this.subdivMask : [true],
         });
       } catch {
         // ignore
@@ -289,6 +328,17 @@ class MetronomeAudioScheduler {
     this.bpm = options.bpm;
     this.meter = options.meter;
     this.groups = options.groups;
+
+    // Subdivisions rule: SOLO sobre negras (denominador 4)
+    if (this.meter.d === 4) {
+      const nextSubdiv = clampInt(options.subdiv ?? 1, 1, 8);
+      this.subdiv = nextSubdiv;
+      this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask);
+    } else {
+      this.subdiv = 1;
+      this.subdivMask = [true];
+    }
+
     this.accentLevels = deriveAccentPerTick(this.meter, this.groups);
   }
 
@@ -366,8 +416,30 @@ class MetronomeAudioScheduler {
     const accentLevel = this.accentLevels[this.tickIndex % this.accentLevels.length] ?? "SUBDIV_WEAK";
     const accentGain = this.accentGains[accentLevel] ?? 1;
 
-    this.scheduleClick(atTime, accentLevel, accentGain);
+    // === AUDIO ===
+    // Si hay subdivisiones (solo d=4), hacemos "grupo" dentro de esta negra.
+    if (this.meter.d === 4 && this.subdiv > 1) {
+      const secondsPerSub = this.secondsPerTick / this.subdiv;
 
+      for (let i = 0; i < this.subdiv; i++) {
+        if (!this.subdivMask[i]) continue;
+
+        const t = atTime + i * secondsPerSub;
+
+        // Importante: mantenemos 3 intensidades
+        // - slot 0 hereda el acento del pulso (bar/group/weak)
+        // - slots > 0 siempre SUBDIV_WEAK
+        const level: AccentLevel = i === 0 ? accentLevel : "SUBDIV_WEAK";
+        const gain = i === 0 ? accentGain : 1;
+
+        this.scheduleClick(t, level, gain);
+      }
+    } else {
+      // normal: un click por tick
+      this.scheduleClick(atTime, accentLevel, accentGain);
+    }
+
+    // === EVENT === (base tick; no spameamos eventos por subdivisiones)
     const tick: ScheduledTick = {
       tickIndex: this.tickIndex,
       atMs: atTime * 1000,

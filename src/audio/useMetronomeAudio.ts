@@ -8,6 +8,9 @@ export type MetronomeStartInput = {
   bpm: number;
   meter: Meter;
   groups?: number[];
+  // subdivisions (solo tiene efecto si meter.d === 4 en el scheduler)
+  subdiv?: number; // 1..8
+  subdivMask?: boolean[]; // length === subdiv
 };
 
 type UseMetronomeAudioOptions = MetronomeStartInput & {
@@ -16,7 +19,8 @@ type UseMetronomeAudioOptions = MetronomeStartInput & {
 };
 
 export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
-  const { bpm, meter, groups, onTick, accentGains } = options;
+  const { bpm, meter, groups, subdiv, subdivMask, onTick, accentGains } = options;
+
   const schedulerRef = useRef<MetronomeAudioScheduler | null>(null);
   const [audioState, setAudioState] = useState<"idle" | "ready" | "error" | "starting">("idle");
   const [lastTick, setLastTick] = useState<ScheduledTick | null>(null);
@@ -40,8 +44,8 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
   }, [accentMap]);
 
   useEffect(() => {
-    schedulerRef.current?.update({ bpm, meter, groups });
-  }, [bpm, groups, meter]);
+    schedulerRef.current?.update({ bpm, meter, groups, subdiv, subdivMask });
+  }, [bpm, groups, meter, subdiv, subdivMask]);
 
   useEffect(
     () => () => {
@@ -52,9 +56,9 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
 
   const start = useCallback(async () => {
     setAudioState((prev) => (prev === "ready" ? prev : "starting"));
-    const result = await schedulerRef.current?.start({ bpm, meter, groups });
+    const result = await schedulerRef.current?.start({ bpm, meter, groups, subdiv, subdivMask });
     return result ?? false;
-  }, [bpm, groups, meter]);
+  }, [bpm, groups, meter, subdiv, subdivMask]);
 
   const stop = useCallback(() => {
     setLastTick(null);
