@@ -19,6 +19,8 @@ private data class EngineParams(
   val meterN: Int,
   val meterD: Int,
   val groups: List<Int> = emptyList(),
+  val subdiv: Int = 1,                  // 1..8 (cuántos golpes entran en un beat/tick base)
+  val subdivMask: BooleanArray = booleanArrayOf(true), // length === subdiv
   val sampleRate: Int = 48000,
   val applyAt: String = "now" // "now" | "bar"
 )
@@ -36,6 +38,10 @@ class NotmetronomeAudioEngineModule : Module() {
   @Volatile private var meterD: Int = 4
   @Volatile private var groups: IntArray = intArrayOf()
   @Volatile private var sampleRate: Int = 48000
+
+  // Subdivisions (native)
+  @Volatile private var subdiv: Int = 1
+  @Volatile private var subdivMask: BooleanArray = booleanArrayOf(true)
 
   // Pending update applied at next bar (optional)
   private val pendingParams = AtomicReference<EngineParams?>(null)
@@ -59,9 +65,9 @@ class NotmetronomeAudioEngineModule : Module() {
       val p = parseStartParams(params)
 
       if (running.get()) {
-        // Already running: treat as update-now
-        applyParamsNow(p)
-        emitState("running", "already running; params updated")
+        // Already running: queue update at bar boundary for deterministic timing
+        pendingParams.set(p.copy(applyAt = "bar"))
+        emitState("running", "already running; params queued (applyAt=bar)")
         return@AsyncFunction null
       }
 
@@ -142,14 +148,9 @@ class NotmetronomeAudioEngineModule : Module() {
         return@AsyncFunction null
       }
 
-      val applyAt = (params["applyAt"] as? String)?.lowercase() ?: "now"
-      if (applyAt == "bar") {
-        pendingParams.set(update.copy(applyAt = "bar"))
-        emitState("running", "update queued (applyAt=bar)")
-      } else {
-        applyParamsNow(update.copy(applyAt = "now"))
-        emitState("running", "updated (applyAt=now)")
-      }
+      // Running -> always apply at bar boundary for perfect, deterministic bar alignment
+      pendingParams.set(update.copy(applyAt = "bar"))
+      emitState("running", "update queued (applyAt=bar)")
 
       null
     }
@@ -176,6 +177,10 @@ class NotmetronomeAudioEngineModule : Module() {
     // First tick immediately
     samplesUntilTick = 0.0
 
+    // Sub-click scheduling within the current tick
+    var subIndex = 0
+    var samplesUntilSub = 0.0
+
     // Click burst state
     var burstRemaining = 0
     var burstFreqHz = 1000.0
@@ -192,35 +197,102 @@ class NotmetronomeAudioEngineModule : Module() {
         if (pending != null) {
           applyParamsNow(pending.copy(applyAt = "now"))
           groupStarts = computeGroupStarts(meterN, groups)
+
+          // Hard bar alignment: start the new bar cleanly
+          tickIndex = 0L
+          samplesUntilTick = 0.0
+
+          // Reset sub state (new params)
+          subIndex = 0
+          samplesUntilSub = 0.0
         }
       }
 
-      val secondsPerTick = (60.0 / bpm) * (4.0 / meterD.toDouble())
+      // Read current params (volatile -> local snapshot)
+      val curBpm = bpm
+      val curMeterN = meterN
+      val curMeterD = meterD
+      val curSubdiv = clampInt(subdiv, 1, 8)
+      val curMask = normalizeSubdivMask(curSubdiv, subdivMask)
+
+      val secondsPerTick = (60.0 / curBpm) * (4.0 / curMeterD.toDouble())
       val samplesPerTick = secondsPerTick * sr.toDouble()
+      val samplesPerSub = samplesPerTick / curSubdiv.toDouble()
 
       for (i in 0 until framesPerBuffer) {
-        // Tick trigger?
+        // Base tick trigger?
         if (samplesUntilTick <= 0.0) {
-          val bt = (tickIndex % meterN).toInt()
+          val bt = (tickIndex % curMeterN).toInt()
           val isDownbeat = bt == 0
           val isGroupStart = groupStarts.getOrElse(bt) { false }
 
-          // Accent mapping (simple but musical)
-          val (freq, amp) = when {
-            isDownbeat -> 1800.0 to 0.95
-            isGroupStart -> 1200.0 to 0.70
-            else -> 800.0 to 0.45
-          }
-
-          burstFreqHz = freq
-          burstAmp = amp
-          burstRemaining = (sr * 0.010).toInt().coerceAtLeast(1) // 10ms click burst
-
+          // Emit event once per base tick (no spam for sub-clicks)
           val atMs = ((totalFramesWritten.toDouble() / sr.toDouble()) * 1000.0)
           emitTick(tickIndex, bt, isDownbeat, atMs)
 
+          // Start sub-cycle for this tick (subIndex = 0 happens "now")
+          subIndex = 0
+          samplesUntilSub = 0.0
+
+          // Schedule next tick
           tickIndex += 1
           samplesUntilTick += samplesPerTick
+
+          // Store accent state for subIndex==0 in the burst trigger below via local vars
+          // (we compute freq/amp when sub-click actually fires)
+        }
+
+        // Sub-click trigger inside this tick
+        if (curSubdiv > 1) {
+          if (samplesUntilSub <= 0.0 && subIndex < curSubdiv) {
+            if (curMask.getOrElse(subIndex) { true }) {
+              // Determine musical accent for subIndex 0, otherwise weaker sub-click
+              val btForAccent = ((tickIndex - 1) % curMeterN).toInt().coerceAtLeast(0)
+              val isDownbeat = btForAccent == 0
+              val isGroupStart = groupStarts.getOrElse(btForAccent) { false }
+
+              val (freq, amp) = if (subIndex == 0) {
+                when {
+                  isDownbeat -> 1800.0 to 0.95
+                  isGroupStart -> 1200.0 to 0.70
+                  else -> 800.0 to 0.45
+                }
+              } else {
+                650.0 to 0.28
+              }
+
+              burstFreqHz = freq
+              burstAmp = amp
+              burstRemaining = (sr * 0.010).toInt().coerceAtLeast(1) // 10ms click burst
+            }
+
+            subIndex += 1
+            samplesUntilSub += samplesPerSub
+          }
+        } else {
+          // subdiv == 1: just fire a single click per base tick at tick boundary.
+          // We do it when samplesUntilTick just got reset by checking if we're effectively at start of tick:
+          // To keep it simple and deterministic, reuse sub mechanism even for subdiv==1.
+          // (subIndex logic already handled in tick trigger)
+          if (subIndex == 0 && samplesUntilSub <= 0.0) {
+            // This means we just entered a new tick cycle
+            val btForAccent = ((tickIndex - 1) % curMeterN).toInt().coerceAtLeast(0)
+            val isDownbeat = btForAccent == 0
+            val isGroupStart = groupStarts.getOrElse(btForAccent) { false }
+
+            val (freq, amp) = when {
+              isDownbeat -> 1800.0 to 0.95
+              isGroupStart -> 1200.0 to 0.70
+              else -> 800.0 to 0.45
+            }
+
+            burstFreqHz = freq
+            burstAmp = amp
+            burstRemaining = (sr * 0.010).toInt().coerceAtLeast(1)
+
+            subIndex = 1 // mark done for this tick
+            samplesUntilSub = 1e9 // disable until next tick
+          }
         }
 
         // Generate sample
@@ -245,6 +317,7 @@ class NotmetronomeAudioEngineModule : Module() {
         buffer[i] = (sample * 32767.0).toInt().toShort()
 
         samplesUntilTick -= 1.0
+        samplesUntilSub -= 1.0
         totalFramesWritten += 1
       }
 
@@ -317,6 +390,12 @@ class NotmetronomeAudioEngineModule : Module() {
       else -> emptyList()
     }
 
+    val subdivAny = map["subdiv"]
+    val subdiv = (subdivAny as? Number)?.toInt() ?: 1
+
+    val maskAny = map["subdivMask"]
+    val subdivMask = parseSubdivMask(subdiv, maskAny)
+
     val applyAt = (map["applyAt"] as? String)?.lowercase() ?: "now"
 
     return EngineParams(
@@ -324,6 +403,8 @@ class NotmetronomeAudioEngineModule : Module() {
       meterN = meterN.coerceIn(1, 64),
       meterD = meterD.coerceIn(1, 64),
       groups = groups,
+      subdiv = clampInt(subdiv, 1, 8),
+      subdivMask = subdivMask,
       sampleRate = sr,
       applyAt = applyAt
     )
@@ -342,6 +423,14 @@ class NotmetronomeAudioEngineModule : Module() {
       else -> groups.toList()
     }
 
+    val subdivNew = ((map["subdiv"] as? Number)?.toInt()) ?: subdiv
+    val maskAny = map["subdivMask"]
+    val maskNew = if (map.containsKey("subdivMask")) {
+      parseSubdivMask(subdivNew, maskAny)
+    } else {
+      normalizeSubdivMask(subdivNew, subdivMask)
+    }
+
     val applyAt = (map["applyAt"] as? String)?.lowercase() ?: "now"
 
     return EngineParams(
@@ -349,6 +438,8 @@ class NotmetronomeAudioEngineModule : Module() {
       meterN = meterNNew.coerceIn(1, 64),
       meterD = meterDNew.coerceIn(1, 64),
       groups = groupsNew,
+      subdiv = clampInt(subdivNew, 1, 8),
+      subdivMask = maskNew,
       sampleRate = srNew,
       applyAt = applyAt
     )
@@ -360,6 +451,8 @@ class NotmetronomeAudioEngineModule : Module() {
     meterD = p.meterD
     groups = p.groups.toIntArray()
     sampleRate = p.sampleRate
+    subdiv = clampInt(p.subdiv, 1, 8)
+    subdivMask = normalizeSubdivMask(subdiv, p.subdivMask)
   }
 
   private fun createAudioTrackOrThrow(sampleRate: Int): AudioTrack {
@@ -423,5 +516,45 @@ class NotmetronomeAudioEngineModule : Module() {
       // ignore
     }
   }
-}
 
+  // ---------- Subdiv helpers ----------
+
+  private fun clampInt(v: Int, min: Int, max: Int): Int {
+    if (v < min) return min
+    if (v > max) return max
+    return v
+  }
+
+  private fun normalizeSubdivMask(subdiv: Int, mask: BooleanArray?): BooleanArray {
+    val n = clampInt(subdiv, 1, 8)
+    if (mask == null || mask.isEmpty()) {
+      return BooleanArray(n) { true }
+    }
+    if (mask.size == n) return mask
+    val out = BooleanArray(n) { true }
+    val take = minOf(n, mask.size)
+    for (i in 0 until take) out[i] = mask[i]
+    return out
+  }
+
+  private fun parseSubdivMask(subdiv: Int, any: Any?): BooleanArray {
+    val n = clampInt(subdiv, 1, 8)
+    if (any == null) return BooleanArray(n) { true }
+
+    if (any is List<*>) {
+      val bools = BooleanArray(n) { true }
+      for (i in 0 until n) {
+        val v = any.getOrNull(i)
+        bools[i] = when (v) {
+          is Boolean -> v
+          is Number -> v.toInt() != 0
+          else -> true
+        }
+      }
+      return bools
+    }
+
+    // Unknown type -> default "all on"
+    return BooleanArray(n) { true }
+  }
+}
