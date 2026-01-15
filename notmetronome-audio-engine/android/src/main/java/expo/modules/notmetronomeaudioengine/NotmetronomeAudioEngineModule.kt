@@ -1,4 +1,4 @@
-﻿package expo.modules.notmetronomeaudioengine
+package expo.modules.notmetronomeaudioengine
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
