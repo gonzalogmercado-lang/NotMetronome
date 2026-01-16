@@ -1,4 +1,4 @@
-﻿import { requireNativeModule } from "expo";
+import { requireNativeModule } from "expo";
 import { Platform } from "react-native";
 
 import { AccentLevel, Meter, TickInfo } from "../core/types";
@@ -46,15 +46,15 @@ const ENVELOPE_DECAY_SECONDS = 0.016;
 const OSCILLATOR_DURATION_SECONDS = 0.03;
 
 const ACCENT_FREQUENCY: Record<AccentLevel, number> = {
-  BAR_STRONG: 1200,
-  GROUP_MED: 900,
-  SUBDIV_WEAK: 700,
+  BAR: 1200,
+  GROUP: 900,
+  WEAK: 700,
 };
 
 const ACCENT_PEAK: Record<AccentLevel, number> = {
-  BAR_STRONG: 0.95,
-  GROUP_MED: 0.65,
-  SUBDIV_WEAK: 0.4,
+  BAR: 0.95,
+  GROUP: 0.65,
+  WEAK: 0.4,
 };
 
 // ---------- Native engine (Android) ----------
@@ -403,7 +403,7 @@ class MetronomeAudioScheduler {
     if (this.nativeTickSub && this.nativeStateSub) return;
 
     this.nativeTickSub = this.native.addListener("onTick", (e) => {
-      const accentLevel = this.accentLevels[e.tickIndex % this.accentLevels.length] ?? "SUBDIV_WEAK";
+      const accentLevel = this.accentLevels[e.tickIndex % this.accentLevels.length] ?? "WEAK";
       const accentGain = this.accentGains[accentLevel] ?? 1;
 
       const tick: ScheduledTick = {
@@ -467,7 +467,7 @@ class MetronomeAudioScheduler {
   private scheduleTick(atTime: number) {
     if (!this.context) return;
 
-    const accentLevel = this.accentLevels[this.tickIndex % this.accentLevels.length] ?? "SUBDIV_WEAK";
+    const accentLevel = this.accentLevels[this.tickIndex % this.accentLevels.length] ?? "WEAK";
     const accentGain = this.accentGains[accentLevel] ?? 1;
 
     const barTick = this.tickIndex % this.meter.n;
@@ -488,7 +488,7 @@ class MetronomeAudioScheduler {
       for (let i = 0; i < beatSubdiv; i++) {
         if (!beatMask[i]) continue;
         const t = atTime + i * secondsPerSub;
-        const level: AccentLevel = i === 0 ? accentLevel : "SUBDIV_WEAK";
+        const level: AccentLevel = i === 0 ? accentLevel : "WEAK";
         const gain = i === 0 ? accentGain : 1;
         this.scheduleClick(t, level, gain);
       }
@@ -516,8 +516,8 @@ class MetronomeAudioScheduler {
     const osc = this.context.createOscillator();
     const gainNode = this.context.createGain();
 
-    const frequency = ACCENT_FREQUENCY[accentLevel] ?? ACCENT_FREQUENCY.SUBDIV_WEAK;
-    const basePeak = ACCENT_PEAK[accentLevel] ?? ACCENT_PEAK.SUBDIV_WEAK;
+    const frequency = ACCENT_FREQUENCY[accentLevel] ?? ACCENT_FREQUENCY.WEAK;
+    const basePeak = ACCENT_PEAK[accentLevel] ?? ACCENT_PEAK.WEAK;
     const peak = clamp01(basePeak * accentGain);
 
     osc.type = "square";
@@ -551,7 +551,7 @@ class MetronomeAudioScheduler {
     if (!this.context) return false;
 
     const when = this.context.currentTime + 0.01;
-    this.scheduleClick(when, "BAR_STRONG", 1);
+    this.scheduleClick(when, "BAR", 1);
     return true;
   }
 }
