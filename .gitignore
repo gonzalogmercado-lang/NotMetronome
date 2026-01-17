@@ -9,3 +9,7 @@ build-tests/
 
 expo-env.d.ts
 # @end expo-cli
+/android/
+/_autolink.log
+/notmetronome-audio-engine/android/build/
+/notmetronome-audio-engine/android/.gradle/

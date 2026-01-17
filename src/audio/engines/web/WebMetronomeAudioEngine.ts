@@ -10,14 +10,14 @@ const ENVELOPE_DECAY_SECONDS = 0.016;
 const OSCILLATOR_DURATION_SECONDS = 0.03;
 
 const ACCENT_FREQUENCY: Record<AccentLevel, number> = {
-  BAR_STRONG: 1200,
-  GROUP_MED: 900,
+  BAR: 1200,
+  GROUP: 900,
   WEAK: 700,
 };
 
 const ACCENT_PEAK: Record<AccentLevel, number> = {
-  BAR_STRONG: 0.95,
-  GROUP_MED: 0.65,
+  BAR: 0.95,
+  GROUP: 0.65,
   WEAK: 0.4,
 };
 
@@ -249,7 +249,7 @@ class WebMetronomeAudioEngine implements MetronomeAudioEngine {
     }
 
     const when = this.context.currentTime + 0.01;
-    this.scheduleClick(when, "BAR_STRONG", 1);
+    this.scheduleClick(when, "BAR", 1);
     const sampleRate = "sampleRate" in this.context ? this.context.sampleRate : undefined;
     const detailParts = [`state=${state}`];
     if (sampleRate) {
