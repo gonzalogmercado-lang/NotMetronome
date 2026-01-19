@@ -23,6 +23,9 @@ export type MetronomeStartInput = {
   bars?: BarConfig[];
   startBarIndex?: number;
   loop?: boolean;
+
+  // NEW: optional beat guide (forces beat down-subtick audible)
+  beatGuide?: boolean;
 };
 
 type UseMetronomeAudioOptions = MetronomeStartInput & {
@@ -43,6 +46,7 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     bars,
     startBarIndex,
     loop,
+    beatGuide,
     onTick,
     onBarChange,
     accentGains,
@@ -64,8 +68,7 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
         onTick?.(tick);
       },
       onStateChange: (state, details) => {
-        const next =
-          state === "ready" ? "ready" : state === "error" ? "error" : "idle";
+        const next = state === "ready" ? "ready" : state === "error" ? "error" : "idle";
 
         setAudioState(next);
         setAudioDetails(details ?? null);
@@ -100,8 +103,21 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
       bars,
       startBarIndex,
       loop,
+      beatGuide,
     });
-  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks, bars, startBarIndex, loop]);
+  }, [
+    bpm,
+    groups,
+    meter,
+    subdiv,
+    subdivMask,
+    pulseSubdivs,
+    pulseSubdivMasks,
+    bars,
+    startBarIndex,
+    loop,
+    beatGuide,
+  ]);
 
   useEffect(
     () => () => {
@@ -125,6 +141,7 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
       bars,
       startBarIndex,
       loop,
+      beatGuide,
     });
 
     // Si falla y el scheduler no llegó a emitir details, dejá una pista
@@ -133,7 +150,19 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     }
 
     return result ?? false;
-  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks, bars, startBarIndex, loop]);
+  }, [
+    bpm,
+    groups,
+    meter,
+    subdiv,
+    subdivMask,
+    pulseSubdivs,
+    pulseSubdivMasks,
+    bars,
+    startBarIndex,
+    loop,
+    beatGuide,
+  ]);
 
   const stop = useCallback(() => {
     setLastTick(null);

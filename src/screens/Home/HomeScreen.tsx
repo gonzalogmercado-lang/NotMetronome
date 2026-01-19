@@ -32,7 +32,8 @@ function HomeScreen() {
     setPulseSubdiv,
     togglePulseSubdivMaskSlot,
   } = useMeterStore();
-  const { isPlaying, setPlaying, proMode, setProMode } = useUiStore();
+
+  const { isPlaying, setPlaying, proMode, setProMode, beatGuide, setBeatGuide } = useUiStore();
 
   const [tickInfo, setTickInfo] = useState<TickInfo | null>(null);
   const [tickCount, setTickCount] = useState(0);
@@ -142,14 +143,7 @@ function HomeScreen() {
     return proMode || meter.n !== 4 || meter.d !== 4;
   }, [meter, proMode]);
 
-  const {
-    start: startClock,
-    stop: stopClock,
-    lastTick,
-    accentLevels,
-    audioState,
-    audioDetails,
-  } = useMetronomeAudio({
+  const { start: startClock, stop: stopClock, lastTick, accentLevels, audioState, audioDetails } = useMetronomeAudio({
     bpm,
 
     // En modo bars, estos 2 quedan como "compat" (y para Clave UI).
@@ -164,6 +158,9 @@ function HomeScreen() {
     bars,
     startBarIndex: safeSelectedBar,
     loop: true,
+
+    // ✅ Beat guide: fuerza que el “golpe base” del beat suene aunque la máscara lo haya apagado
+    beatGuide,
 
     onBarChange: (nextBarIndex) => {
       // Seguimos el playback en UI
@@ -449,16 +446,22 @@ function HomeScreen() {
               )}
 
               {selectedSubdiv > 1 && (
-                <Text style={styles.helperText}>
-                  Ejemplo: en 5, dejá 1.0.1.0.1 para “tresillo raro” sin cambiar el subdiv.
-                </Text>
+                <Text style={styles.helperText}>Ejemplo: en 5, dejá 1.0.1.0.1 para “tresillo raro” sin cambiar el subdiv.</Text>
               )}
             </View>
           </>
         )}
       </View>
 
-      {/* Pro mode + stats */}
+      {/* Beat guide + Pro mode + stats */}
+      <View style={styles.switchRow}>
+        <Text style={styles.sectionLabel}>Beat guía</Text>
+        <Switch value={beatGuide} onValueChange={setBeatGuide} />
+      </View>
+      <Text style={styles.helperText}>
+        Si está activo, el “golpe base” del beat suena siempre aunque hayas apagado el primer slot de la máscara.
+      </Text>
+
       <View style={styles.switchRow}>
         <Text style={styles.sectionLabel}>Pro mode</Text>
         <Switch value={proMode} onValueChange={setProMode} />
