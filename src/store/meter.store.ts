@@ -48,6 +48,16 @@ type MeterState = {
   removeBar: (barIndex: number) => void;
 
   /**
+   * ✅ Duplica el bar indicado (deep clone) y agrega el duplicado AL FINAL.
+   */
+  duplicateBar: (barIndex: number) => void;
+
+  /**
+   * ✅ Reemplaza el timeline completo (para cargar proyectos)
+   */
+  replaceTimeline: (bars: Bar[], selectedBarIndex?: number) => void;
+
+  /**
    * APIs existentes (operan sobre el bar seleccionado)
    */
   setMeter: (n: number, d: number) => void;
@@ -78,29 +88,29 @@ const clampIndex = (value: number, maxExclusive: number) => {
 
 const DEFAULT_SUBDIV = 1;
 
+// Clave rules (user preference)
+const MIN_GROUP_SIZE = 2;
+const MAX_GROUP_SIZE = 8;
+
 const normalizePulseSubdivs = (n: number, prev?: number[]) => {
   const safeN = clampInt(n, 1, 64);
-  const base = Array.isArray(prev) ? prev.slice(0, safeN) : [];
-  while (base.length < safeN) base.push(DEFAULT_SUBDIV);
-  // Hoy la UI usa 1..8, pero el motor puede tolerar más. Mantenemos 1..16 como antes.
-  return base.map((x) => clampInt(x, 1, 16));
+  return Array.from({ length: safeN }, (_, i) => {
+    const raw = Array.isArray(prev) ? prev[i] : DEFAULT_SUBDIV;
+    return clampInt(raw ?? DEFAULT_SUBDIV, 1, 16);
+  });
 };
 
 const normalizeMask = (subdiv: number, prev?: boolean[]) => {
   const n = clampInt(subdiv, 1, 16);
-  const base = Array.from({ length: n }).map((_, i) => prev?.[i] ?? true);
-  // no permitir todo apagado
-  if (!base.some(Boolean)) base[0] = true;
-  return base;
+  // ✅ Permitir TODO apagado (silencio real). Default: true si no hay dato previo.
+  return Array.from({ length: n }, (_, i) => prev?.[i] ?? true);
 };
 
 const normalizePulseMasks = (pulseSubdivs: number[], prev?: boolean[][]) => {
-  const out: boolean[][] = [];
-  for (let i = 0; i < pulseSubdivs.length; i++) {
-    const subdiv = clampInt(pulseSubdivs[i] ?? 1, 1, 16);
-    out.push(normalizeMask(subdiv, prev?.[i]));
-  }
-  return out;
+  return pulseSubdivs.map((s, i) => {
+    const subdiv = clampInt(s ?? 1, 1, 16);
+    return normalizeMask(subdiv, prev?.[i]);
+  });
 };
 
 const makeBar = (n: number, d: number): Bar => {
@@ -118,20 +128,78 @@ const makeBar = (n: number, d: number): Bar => {
   };
 };
 
-const normalizeGroupsForMeter = (groups: number[] | undefined, meterN: number) => {
-  if (!groups || groups.length === 0) return undefined;
-  return sum(groups) === meterN ? groups : undefined;
+const computePoolTicksForBar = (meter: Meter, pulseSubdivs: number[]) => {
+  // pool-mode solo tiene sentido en d=4 (por ahora)
+  if (meter.d !== 4) return meter.n;
+  if (!Array.isArray(pulseSubdivs) || pulseSubdivs.length !== meter.n) return meter.n;
+  return sum(pulseSubdivs.map((v) => clampInt(v ?? 1, 1, 16)));
 };
 
-export const useMeterStore = create<MeterState>((set, get) => {
+/**
+ * ✅ Normaliza groups soportando:
+ * - beat-mode: sum(groups) === meter.n
+ * - pool-mode (solo d=4): sum(groups) === sum(pulseSubdivs) (ej 20 en quintillos)
+ *
+ * Además aplica regla: grupos 2..8.
+ */
+const normalizeGroupsForBar = (groups: number[] | undefined, bar: { meter: Meter; pulseSubdivs: number[] }) => {
+  if (!groups || groups.length === 0) return undefined;
+
+  const safe: number[] = [];
+  for (let i = 0; i < groups.length; i += 1) {
+    const g = clampInt(groups[i] as any, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    if (!Number.isFinite(g)) return undefined;
+    if (g < MIN_GROUP_SIZE || g > MAX_GROUP_SIZE) return undefined;
+    safe.push(g);
+  }
+
+  const total = sum(safe);
+  const beatTicks = bar.meter.n;
+  const poolTicks = computePoolTicksForBar(bar.meter, bar.pulseSubdivs);
+
+  if (total === beatTicks) return safe.slice(); // beat-mode
+  if (bar.meter.d === 4 && total === poolTicks) return safe.slice(); // pool-mode
+  return undefined;
+};
+
+const normalizeIncomingBar = (b: Bar): Bar => {
+  const nextN = clampInt(b?.meter?.n ?? 4, 1, 64);
+  const nextD = clampInt(b?.meter?.d ?? 4, 1, 64);
+
+  const nextPulseSubdivs = normalizePulseSubdivs(nextN, b?.pulseSubdivs);
+  const nextPulseMasks = normalizePulseMasks(nextPulseSubdivs, b?.pulseSubdivMasks);
+
+  const nextMeter: Meter = { n: nextN, d: nextD };
+  const nextGroups = normalizeGroupsForBar(b?.groups, { meter: nextMeter, pulseSubdivs: nextPulseSubdivs });
+
+  return {
+    meter: nextMeter,
+    groups: nextGroups,
+    pulseSubdivs: nextPulseSubdivs,
+    pulseSubdivMasks: nextPulseMasks,
+  };
+};
+
+// ✅ deep clone para duplicar SIN refs compartidas
+const cloneBarDeep = (b: Bar): Bar => {
+  return {
+    meter: { n: b.meter.n, d: b.meter.d },
+    groups: b.groups ? b.groups.slice() : undefined,
+    pulseSubdivs: (b.pulseSubdivs ?? []).slice(),
+    pulseSubdivMasks: (b.pulseSubdivMasks ?? []).map((row) => (row ?? []).slice()),
+  };
+};
+
+export const useMeterStore = create<MeterState>((set) => {
   const initialBar = makeBar(4, 4);
 
   const syncSelectedProxiesFromBars = (bars: Bar[], selectedBarIndex: number) => {
-    const idx = clampIndex(selectedBarIndex, bars.length);
-    const bar = bars[idx] ?? initialBar;
+    const safeBars = bars.length > 0 ? bars : [initialBar];
+    const idx = clampIndex(selectedBarIndex, safeBars.length);
+    const bar = safeBars[idx] ?? initialBar;
 
     return {
-      bars,
+      bars: safeBars,
       selectedBarIndex: idx,
       meter: bar.meter,
       groups: bar.groups,
@@ -143,14 +211,15 @@ export const useMeterStore = create<MeterState>((set, get) => {
   const writeSelectedBar = (updater: (bar: Bar) => Bar) => {
     set((state) => {
       const idx = clampIndex(state.selectedBarIndex, state.bars.length);
-      const bars = state.bars.slice();
-      const current = bars[idx] ?? initialBar;
+      const current = state.bars[idx] ?? initialBar;
       const next = updater(current);
 
-      bars[idx] = next;
+      const nextBars =
+        state.bars.length > 0
+          ? state.bars.map((b, i) => (i === idx ? next : b))
+          : [next];
 
-      // Proxies siempre sincronizados con el bar seleccionado
-      return syncSelectedProxiesFromBars(bars, idx);
+      return syncSelectedProxiesFromBars(nextBars, idx);
     });
   };
 
@@ -173,10 +242,24 @@ export const useMeterStore = create<MeterState>((set, get) => {
 
     addBar: () =>
       set((state) => {
-        const nextBars = state.bars.slice();
-        nextBars.push(makeBar(4, 4)); // ✅ siempre default 4/4
+        const nextBars = [...state.bars, makeBar(4, 4)]; // ✅ sin push/splice
         const nextIndex = nextBars.length - 1;
         return syncSelectedProxiesFromBars(nextBars, nextIndex); // selecciona el nuevo para editar rápido
+      }),
+
+    // ✅ DUPLICATE: clona el bar indicado (deep) y lo agrega AL FINAL, seleccionándolo.
+    duplicateBar: (barIndex) =>
+      set((state) => {
+        const safeBars = state.bars.length > 0 ? state.bars : [initialBar];
+        const idx = clampIndex(barIndex, safeBars.length);
+        const current = safeBars[idx] ?? initialBar;
+
+        const dup = cloneBarDeep(current);
+
+        const nextBars = [...safeBars, dup]; // 🔥 al final
+        const nextIndex = nextBars.length - 1;
+
+        return syncSelectedProxiesFromBars(nextBars, nextIndex);
       }),
 
     removeBar: (barIndex) =>
@@ -184,8 +267,8 @@ export const useMeterStore = create<MeterState>((set, get) => {
         if (state.bars.length <= 1) return state; // no permitir 0 bars
 
         const idxToRemove = clampIndex(barIndex, state.bars.length);
-        const nextBars = state.bars.slice();
-        nextBars.splice(idxToRemove, 1);
+
+        const nextBars = state.bars.filter((_, i) => i !== idxToRemove); // ✅ sin splice
 
         // Ajustar selección
         let nextSelected = state.selectedBarIndex;
@@ -193,6 +276,19 @@ export const useMeterStore = create<MeterState>((set, get) => {
         if (idxToRemove === nextSelected) nextSelected = Math.min(nextSelected, nextBars.length - 1);
 
         return syncSelectedProxiesFromBars(nextBars, nextSelected);
+      }),
+
+    // ✅ Carga completa de timeline (para proyectos)
+    replaceTimeline: (bars, selectedBarIndex) =>
+      set(() => {
+        const incoming = Array.isArray(bars) ? bars : [];
+        const nextBarsRaw = incoming.length > 0 ? incoming : [initialBar];
+
+        // Normalizamos + cortamos refs internas (defensivo)
+        const nextBars = nextBarsRaw.map((b) => normalizeIncomingBar(b));
+
+        const idx = clampIndex(selectedBarIndex ?? 0, nextBars.length);
+        return syncSelectedProxiesFromBars(nextBars, idx);
       }),
 
     // APIs existentes sobre el bar seleccionado
@@ -204,10 +300,11 @@ export const useMeterStore = create<MeterState>((set, get) => {
         const nextPulseSubdivs = normalizePulseSubdivs(nextN, bar.pulseSubdivs);
         const nextPulseMasks = normalizePulseMasks(nextPulseSubdivs, bar.pulseSubdivMasks);
 
-        const nextGroups = normalizeGroupsForMeter(bar.groups, nextN);
+        const nextMeter: Meter = { n: nextN, d: nextD };
+        const nextGroups = normalizeGroupsForBar(bar.groups, { meter: nextMeter, pulseSubdivs: nextPulseSubdivs });
 
         return {
-          meter: { n: nextN, d: nextD },
+          meter: nextMeter,
           groups: nextGroups,
           pulseSubdivs: nextPulseSubdivs,
           pulseSubdivMasks: nextPulseMasks,
@@ -216,7 +313,7 @@ export const useMeterStore = create<MeterState>((set, get) => {
 
     setGroups: (groups) =>
       writeSelectedBar((bar) => {
-        const nextGroups = normalizeGroupsForMeter(groups, bar.meter.n);
+        const nextGroups = normalizeGroupsForBar(groups, { meter: bar.meter, pulseSubdivs: bar.pulseSubdivs });
         return { ...bar, groups: nextGroups };
       }),
 
@@ -228,34 +325,46 @@ export const useMeterStore = create<MeterState>((set, get) => {
     setPulseSubdiv: (beatIndex, subdiv) =>
       writeSelectedBar((bar) => {
         const idx = clampInt(beatIndex, 0, Math.max(0, bar.meter.n - 1));
-        const nextSubdivs = bar.pulseSubdivs.slice();
-        nextSubdivs[idx] = clampInt(subdiv, 1, 16);
+        const nextSubdivs = bar.pulseSubdivs.map((v, i) => (i === idx ? clampInt(subdiv, 1, 16) : v));
 
         const nextMasks = normalizePulseMasks(nextSubdivs, bar.pulseSubdivMasks);
-        return { ...bar, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
+
+        // ✅ si groups era pool-mode, puede volverse inválido al cambiar subdivs
+        const nextGroups = normalizeGroupsForBar(bar.groups, { meter: bar.meter, pulseSubdivs: nextSubdivs });
+
+        return { ...bar, groups: nextGroups, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
       }),
 
     setAllPulseSubdivs: (subdiv) =>
       writeSelectedBar((bar) => {
         const v = clampInt(subdiv, 1, 16);
-        const nextSubdivs = Array(bar.meter.n).fill(v);
+        const nextSubdivs = Array.from({ length: bar.meter.n }, () => v);
         const nextMasks = normalizePulseMasks(nextSubdivs, bar.pulseSubdivMasks);
-        return { ...bar, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
+
+        const nextGroups = normalizeGroupsForBar(bar.groups, { meter: bar.meter, pulseSubdivs: nextSubdivs });
+
+        return { ...bar, groups: nextGroups, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
       }),
 
     setPulseSubdivs: (subdivs) =>
       writeSelectedBar((bar) => {
         const nextSubdivs = normalizePulseSubdivs(bar.meter.n, subdivs);
         const nextMasks = normalizePulseMasks(nextSubdivs, bar.pulseSubdivMasks);
-        return { ...bar, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
+
+        const nextGroups = normalizeGroupsForBar(bar.groups, { meter: bar.meter, pulseSubdivs: nextSubdivs });
+
+        return { ...bar, groups: nextGroups, pulseSubdivs: nextSubdivs, pulseSubdivMasks: nextMasks };
       }),
 
     setPulseSubdivMask: (beatIndex, mask) =>
       writeSelectedBar((bar) => {
         const idx = clampInt(beatIndex, 0, Math.max(0, bar.meter.n - 1));
         const subdiv = clampInt(bar.pulseSubdivs[idx] ?? 1, 1, 16);
-        const nextMasks = bar.pulseSubdivMasks.slice();
-        nextMasks[idx] = normalizeMask(subdiv, mask);
+        const nextRow = normalizeMask(subdiv, mask);
+
+        // ✅ clonamos también filas no tocadas (defensivo contra refs compartidas)
+        const nextMasks = bar.pulseSubdivMasks.map((row, i) => (i === idx ? nextRow : row.slice()));
+
         return { ...bar, pulseSubdivMasks: nextMasks };
       }),
 
@@ -266,14 +375,11 @@ export const useMeterStore = create<MeterState>((set, get) => {
         const slot = clampInt(slotIndex, 0, Math.max(0, subdiv - 1));
 
         const prevMask = normalizeMask(subdiv, bar.pulseSubdivMasks[idx]);
-        const nextMask = prevMask.slice();
-        nextMask[slot] = !nextMask[slot];
+        const nextMask = prevMask.map((v, i) => (i === slot ? !v : v));
 
-        // no permitir todo apagado
-        if (!nextMask.some(Boolean)) return bar;
-
-        const nextMasks = bar.pulseSubdivMasks.slice();
-        nextMasks[idx] = nextMask;
+        // ✅ permitir todo apagado
+        // ✅ clonamos filas internas para cortar refs
+        const nextMasks = bar.pulseSubdivMasks.map((row, i) => (i === idx ? nextMask : row.slice()));
 
         return { ...bar, pulseSubdivMasks: nextMasks };
       }),
@@ -281,4 +387,3 @@ export const useMeterStore = create<MeterState>((set, get) => {
 });
 
 export type { Bar, Meter };
-
