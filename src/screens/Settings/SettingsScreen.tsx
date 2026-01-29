@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+﻿import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 function SettingsScreen() {
   return (
@@ -8,7 +8,7 @@ function SettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.label}>Audio</Text>
         <Text style={styles.text}>
-          (Placeholder) Sacamos el panel viejo de debug de audio porque estaba desalineado con la API actual.
+          (Placeholder) Panel de settings. El debug de audio lo dejamos fuera por ahora para no acoplar la UI a la API del engine.
         </Text>
       </View>
     </ScrollView>
