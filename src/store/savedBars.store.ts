@@ -1,100 +1,86 @@
-import { create } from "zustand";
+﻿import { create } from "zustand";
 
-import { sumGroups } from "../core/clave/builder";
-import { formatGroups } from "../core/clave/presets";
 import { Meter } from "../core/types";
 
-type SavedBar = {
+export type SavedBar = {
   id: string;
   name: string;
   meter: Meter;
   claveEnabled: boolean;
   groups?: number[];
-  createdAt: number;
-  updatedAt: number;
+  createdAtMs?: number;
+  updatedAtMs?: number;
 };
 
 type SavedBarsState = {
   savedBars: SavedBar[];
-  addFromCurrent: (current: { meter: Meter; claveEnabled: boolean; groups?: number[] }, name?: string) => SavedBar;
-  add: (bar: SavedBar) => void;
-  update: (id: string, patch: Partial<Omit<SavedBar, "id" | "createdAt">>) => void;
-  remove: (id: string) => void;
-  duplicate: (id: string) => void;
-  getById: (id: string) => SavedBar | undefined;
+
+  addSavedBar: (bar: Omit<SavedBar, "id" | "createdAtMs" | "updatedAtMs"> & { id?: string }) => string;
+  updateSavedBar: (id: string, patch: Partial<Omit<SavedBar, "id">>) => void;
+  removeSavedBar: (id: string) => void;
+
+  getById: (id: string) => SavedBar | null;
+  clearSavedBars: () => void;
 };
 
-const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const newId = () => `saved_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-const normalizeGroups = (meter: Meter, claveEnabled: boolean, groups?: number[]): number[] | undefined => {
-  if (!claveEnabled) return undefined;
-  if (!groups || groups.length === 0) return undefined;
-  if (sumGroups(groups) !== meter.n) return undefined;
-  return groups;
-};
-
-const buildDefaultName = (meter: Meter, groups?: number[]) => {
-  const suffix = groups && groups.length > 0 ? ` ${formatGroups(groups)}` : "";
-  return `${meter.n}/${meter.d}${suffix}`.trim();
-};
+const cloneMeter = (m: Meter): Meter => ({ n: m.n, d: m.d });
+const cloneGroups = (g?: number[]) => (Array.isArray(g) ? g.slice() : g);
 
 export const useSavedBarsStore = create<SavedBarsState>((set, get) => ({
   savedBars: [],
-  addFromCurrent: (current, name) => {
+
+  addSavedBar: (input) => {
     const now = Date.now();
-    const normalizedGroups = normalizeGroups(current.meter, current.claveEnabled, current.groups);
-    const resolvedName = name?.trim() || buildDefaultName(current.meter, normalizedGroups);
-    const bar: SavedBar = {
-      id: createId(),
-      name: resolvedName,
-      meter: current.meter,
-      claveEnabled: current.claveEnabled,
-      groups: normalizedGroups,
-      createdAt: now,
-      updatedAt: now,
+    const id = input.id ?? newId();
+
+    const next: SavedBar = {
+      id,
+      name: input.name ?? "Saved bar",
+      meter: cloneMeter(input.meter),
+      claveEnabled: !!input.claveEnabled,
+      groups: cloneGroups(input.groups),
+      createdAtMs: now,
+      updatedAtMs: now,
     };
-    set((state) => ({ savedBars: [...state.savedBars, bar] }));
-    return bar;
+
+    set((state) => ({ savedBars: [...state.savedBars, next] }));
+    return id;
   },
-  add: (bar) => {
-    set((state) => ({ savedBars: [...state.savedBars, bar] }));
-  },
-  update: (id, patch) => {
+
+  updateSavedBar: (id, patch) => {
+    const now = Date.now();
     set((state) => ({
-      savedBars: state.savedBars.map((bar) => {
-        if (bar.id !== id) return bar;
-        const meter = patch.meter ?? bar.meter;
-        const claveEnabled = patch.claveEnabled ?? bar.claveEnabled;
-        const groups = normalizeGroups(meter, claveEnabled, patch.groups ?? bar.groups);
-        return {
-          ...bar,
+      savedBars: state.savedBars.map((b) => {
+        if (b.id !== id) return b;
+
+        const next: SavedBar = {
+          ...b,
           ...patch,
-          meter,
-          claveEnabled,
-          groups,
-          updatedAt: Date.now(),
+          meter: patch.meter ? cloneMeter(patch.meter) : b.meter,
+          groups: patch.groups !== undefined ? cloneGroups(patch.groups) : b.groups,
+          updatedAtMs: now,
         };
+
+        // Clones defensivos para inmutabilidad real
+        next.meter = cloneMeter(next.meter);
+        next.groups = cloneGroups(next.groups);
+
+        return next;
       }),
     }));
   },
-  remove: (id) => set((state) => ({ savedBars: state.savedBars.filter((bar) => bar.id !== id) })),
-  duplicate: (id) => {
-    const existing = get().savedBars.find((bar) => bar.id === id);
-    if (!existing) return;
-    const now = Date.now();
-    const copy: SavedBar = {
-      ...existing,
-      id: createId(),
-      name: `${existing.name} (copy)`,
-      createdAt: now,
-      updatedAt: now,
-    };
-    set((state) => ({ savedBars: [...state.savedBars, copy] }));
+
+  removeSavedBar: (id) => {
+    set((state) => ({ savedBars: state.savedBars.filter((b) => b.id !== id) }));
   },
-  getById: (id) => get().savedBars.find((bar) => bar.id === id),
+
+  getById: (id) => {
+    return get().savedBars.find((b) => b.id === id) ?? null;
+  },
+
+  clearSavedBars: () => set({ savedBars: [] }),
 }));
 
-// Persistencia opcional: si se agrega AsyncStorage en el futuro,
-// envolver el store con `persist` y un storage compatible.
-
-export type { SavedBar };
+export default useSavedBarsStore;

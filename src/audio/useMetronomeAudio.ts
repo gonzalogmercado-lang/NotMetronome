@@ -24,7 +24,7 @@ export type MetronomeStartInput = {
   startBarIndex?: number;
   loop?: boolean;
 
-  // Beat guide (forces beat boundary audible)
+  // Beat guide: forces beat down-subtick audible
   beatGuide?: boolean;
 };
 

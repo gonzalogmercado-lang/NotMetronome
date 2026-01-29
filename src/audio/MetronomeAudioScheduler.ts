@@ -33,7 +33,7 @@ type StartOptions = {
   startBarIndex?: number;
   loop?: boolean;
 
-  // Beat guide (forces beat boundary audible)
+  // Beat guide: forces beat-down subtick to be audible even if edited off
   beatGuide?: boolean;
 };
 
@@ -304,7 +304,7 @@ class MetronomeAudioScheduler {
 
   // Native UI synthesis (when native only reports 1 tick per beat)
   private nativePrevBeatKey: string | null = null;
-  private nativeSeesSubticks = false;
+  private nativeSeesSubticks = false; // per-beat detection
   private nativeSubIndex = 0;
   private nativeUiTimers: ReturnType<typeof setTimeout>[] = [];
   private nativePendingSynthKey: string | null = null;
@@ -322,7 +322,7 @@ class MetronomeAudioScheduler {
   private groups?: number[];
 
   // Global (legacy) subdivisions
-  private subdiv = 1; // 1..8
+  private subdiv = 1; // 1..16 (web); clamped to 8 when sent to native
   private subdivMask: boolean[] = [true];
 
   // Per-beat (web uses; native may use)
@@ -470,7 +470,6 @@ class MetronomeAudioScheduler {
   }
 
   private recomputeAccentModel(maxSubdiv: number) {
-    // pool ticks is meaningful mainly for d=4, but we compute it anyway
     this.poolTicksPerBar = computePoolTicks(this.meter.n, this.pulseSubdivs, this.subdiv, maxSubdiv);
 
     const gsum = this.groups && this.groups.length ? sum(this.groups) : 0;
@@ -521,17 +520,17 @@ class MetronomeAudioScheduler {
         const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
         const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
 
-        const pulseSubdivsNative = hasPulse
-          ? (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE))
-          : undefined;
+        let pulseSubdivsNative: number[] | undefined = undefined;
+        let pulseSubdivMasksNative: boolean[][] | undefined = undefined;
 
-        const pulseSubdivMasksNative =
-          hasPulse && pulseSubdivsNative
-            ? applyBeatGuideToPulseMasks(
-                normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
-                this.beatGuideEnabled
-              )
-            : undefined;
+        if (hasPulse) {
+          pulseSubdivsNative = (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE));
+
+          pulseSubdivMasksNative = applyBeatGuideToPulseMasks(
+            normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
+            this.beatGuideEnabled
+          );
+        }
 
         await this.native.start({
           bpm: this.bpm,
@@ -663,17 +662,17 @@ class MetronomeAudioScheduler {
         const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
         const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
 
-        const pulseSubdivsNative = hasPulse
-          ? (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE))
-          : undefined;
+        let pulseSubdivsNative: number[] | undefined = undefined;
+        let pulseSubdivMasksNative: boolean[][] | undefined = undefined;
 
-        const pulseSubdivMasksNative =
-          hasPulse && pulseSubdivsNative
-            ? applyBeatGuideToPulseMasks(
-                normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
-                this.beatGuideEnabled
-              )
-            : undefined;
+        if (hasPulse) {
+          pulseSubdivsNative = (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE));
+
+          pulseSubdivMasksNative = applyBeatGuideToPulseMasks(
+            normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
+            this.beatGuideEnabled
+          );
+        }
 
         await this.native.update({
           bpm: this.bpm,
@@ -703,12 +702,17 @@ class MetronomeAudioScheduler {
 
   private setFromOptions(options: StartOptions, mode: "start" | "update") {
     this.bpm = options.bpm;
-    this.beatGuideEnabled = !!options.beatGuide;
 
-    // Keep legacy subdiv ALWAYS (native uses it for any denominator)
-    const nextSubdiv = clampInt(options.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
+    if (typeof options.beatGuide === "boolean") {
+      this.beatGuideEnabled = options.beatGuide;
+    } else {
+      this.beatGuideEnabled = !!options.beatGuide;
+    }
+
+    // Keep legacy subdiv always; allow web up to 16, clamp to 8 only when sending to native.
+    const nextSubdiv = clampInt(options.subdiv ?? 1, 1, MAX_SUBDIV_WEB);
     this.subdiv = nextSubdiv;
-    this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask, MAX_SUBDIV_NATIVE);
+    this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask, MAX_SUBDIV_WEB);
 
     const bars = options.bars && options.bars.length > 0 ? normalizeBars(options.bars) : undefined;
 
@@ -808,6 +812,7 @@ class MetronomeAudioScheduler {
     const nextBar = this.bars[nextIndex];
     const nextMeter = normalizeMeter(nextBar.meter);
 
+    // Keep legacy subdiv stable across bars (do not derive from pulseSubdivs)
     const legacySubdiv = clampInt(this.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
     const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
     const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
@@ -911,6 +916,9 @@ class MetronomeAudioScheduler {
         // New beat boundary
         this.nativePrevBeatKey = beatKey;
         this.nativeSubIndex = 0;
+
+        // Reset per-beat subtick detection
+        this.nativeSeesSubticks = false;
 
         const isAudible0 = !!beatMask[0];
         const accentLevel0 = this.getAccentForSubTick(e.barTick, 0, MAX_SUBDIV_NATIVE);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Button, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
 import { addGroup, canAddGroup, remainingTicks, undoGroup } from "../../core/clave/builder";
@@ -74,7 +74,6 @@ function CreatorScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Creator</Text>
-      <Text style={styles.subtitle}>Loop: {bars.length} compases</Text>
 
       <View style={styles.list}>
         {bars.map((bar) => {
@@ -89,9 +88,7 @@ function CreatorScreen() {
                   {claveActive ? "ON" : "OFF"}
                 </Text>
               </View>
-              <Text style={styles.barSubtitle}>
-                Clave: {bar.groups && bar.groups.length > 0 ? formatGroups(bar.groups) : "—"}
-              </Text>
+              <Text style={styles.barSubtitle}>Clave: {bar.groups && bar.groups.length > 0 ? formatGroups(bar.groups) : "—"}</Text>
               {bar.name ? <Text style={styles.barName}>{bar.name}</Text> : null}
               <View style={styles.barActions}>
                 <Pressable style={styles.actionButton} onPress={() => selectBar(bar.id)}>
@@ -141,6 +138,7 @@ function CreatorScreen() {
       {selectedBar ? (
         <View style={styles.editorBlock}>
           <Text style={styles.sectionTitle}>Editor</Text>
+
           <View style={styles.meterRow}>
             <Button
               title="-"
@@ -151,11 +149,9 @@ function CreatorScreen() {
             <Text style={styles.meterValue}>
               {selectedBar.meter.n}/{selectedBar.meter.d}
             </Text>
-            <Button
-              title="+"
-              onPress={() => updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: selectedBar.meter.n + 1 } })}
-            />
+            <Button title="+" onPress={() => updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: selectedBar.meter.n + 1 } })} />
           </View>
+
           <View style={styles.denomRow}>
             {[4, 8, 16].map((value) => {
               const selected = selectedBar.meter.d === value;
@@ -173,8 +169,12 @@ function CreatorScreen() {
 
           <View style={styles.switchRow}>
             <Text style={styles.sectionTitle}>Clave</Text>
-            <Switch value={selectedBar.claveEnabled} onValueChange={(value) => updateBar(selectedBar.id, { claveEnabled: value })} />
+            <Switch
+              value={selectedBar.claveEnabled}
+              onValueChange={(value) => updateBar(selectedBar.id, { claveEnabled: value })}
+            />
           </View>
+
           <Text style={styles.helperText}>
             Clave actual: {selectedBar.groups && selectedBar.groups.length > 0 ? formatGroups(selectedBar.groups) : "—"}
           </Text>
@@ -238,11 +238,9 @@ function CreatorScreen() {
                       );
                     })}
                   </View>
+
                   <View style={styles.builderRow}>
-                    <Pressable
-                      style={styles.builderButton}
-                      onPress={() => updateBar(selectedBar.id, { groups: undoGroup(editorGroups) })}
-                    >
+                    <Pressable style={styles.builderButton} onPress={() => updateBar(selectedBar.id, { groups: undoGroup(editorGroups) })}>
                       <Text style={styles.builderText}>Undo</Text>
                     </Pressable>
                     <Pressable style={styles.builderButton} onPress={() => updateBar(selectedBar.id, { groups: [] })}>
@@ -262,240 +260,71 @@ function CreatorScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 24,
-    gap: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-  },
-  subtitle: {
-    color: "#555",
-  },
-  list: {
-    gap: 12,
-  },
-  barCard: {
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ddd",
-    padding: 12,
-    backgroundColor: "#fff",
-    gap: 6,
-  },
-  barCardSelected: {
-    borderColor: "#222",
-  },
-  barHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  barTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  barSubtitle: {
-    color: "#666",
-  },
-  barName: {
-    color: "#444",
-    fontWeight: "600",
-  },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  badgeOn: {
-    backgroundColor: "#222",
-  },
-  badgeOff: {
-    backgroundColor: "#888",
-  },
-  barActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  actionButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
-  },
-  actionText: {
-    fontWeight: "600",
-    color: "#222",
-  },
-  addBlock: {
-    gap: 8,
-  },
-  addButton: {
-    backgroundColor: "#222",
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-  addText: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  addOptions: {
-    gap: 8,
-  },
-  savedList: {
-    gap: 6,
-    padding: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ddd",
-    backgroundColor: "#fafafa",
-  },
-  savedItem: {
-    paddingVertical: 6,
-  },
-  savedName: {
-    fontWeight: "600",
-  },
-  savedMeta: {
-    color: "#666",
-  },
-  editorBlock: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#ddd",
-    gap: 10,
-    backgroundColor: "#fff",
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  meterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  meterValue: {
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  denomRow: {
-    flexDirection: "row",
-    gap: 12,
-    justifyContent: "flex-start",
-    alignItems: "center",
-  },
-  denomOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
-  },
-  denomOptionActive: {
-    backgroundColor: "#222",
-    borderColor: "#222",
-  },
-  denomText: {
-    color: "#222",
-    fontWeight: "600",
-  },
-  denomTextActive: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  switchRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  segmentRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  segmentButton: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
-    alignItems: "center",
-  },
-  segmentButtonActive: {
-    backgroundColor: "#222",
-    borderColor: "#222",
-  },
-  segmentText: {
-    color: "#222",
-    fontWeight: "600",
-  },
-  segmentTextActive: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  presetBlock: {
-    gap: 8,
-  },
-  presetsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  presetButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
-  },
-  presetButtonActive: {
-    backgroundColor: "#222",
-    borderColor: "#222",
-  },
-  presetText: {
-    color: "#222",
-    fontWeight: "600",
-  },
-  presetTextActive: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  builderBlock: {
-    gap: 8,
-  },
-  builderRow: {
-    flexDirection: "row",
-    gap: 8,
-    flexWrap: "wrap",
-  },
-  builderButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#aaa",
-  },
-  builderButtonDisabled: {
-    opacity: 0.4,
-  },
-  builderText: {
-    color: "#222",
-    fontWeight: "600",
-  },
-  builderTextDisabled: {
-    color: "#666",
-    fontWeight: "600",
-  },
-  helperText: {
-    color: "#777",
-  },
+  container: { padding: 16, gap: 12 },
+  title: { fontSize: 22, fontWeight: "700" },
+
+  list: { gap: 10 },
+  barCard: { padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  barCardSelected: { borderColor: "#999" },
+
+  barHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  barTitle: { fontSize: 16, fontWeight: "700" },
+
+  badge: { fontSize: 12, fontWeight: "700", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  badgeOn: { borderWidth: 1, borderColor: "#aaa" },
+  badgeOff: { borderWidth: 1, borderColor: "#ddd" },
+
+  barSubtitle: { marginTop: 6, fontSize: 14 },
+  barName: { marginTop: 4, fontSize: 13, opacity: 0.8 },
+
+  barActions: { flexDirection: "row", gap: 10, marginTop: 10 },
+  actionButton: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: "#ddd" },
+  actionText: { fontSize: 13, fontWeight: "600" },
+
+  addBlock: { gap: 10 },
+  addButton: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  addText: { fontSize: 14, fontWeight: "700" },
+  addOptions: { gap: 8 },
+  savedList: { gap: 8, marginTop: 8 },
+  savedItem: { padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  savedName: { fontSize: 14, fontWeight: "700" },
+  savedMeta: { fontSize: 12, opacity: 0.7 },
+
+  editorBlock: { marginTop: 6, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#ddd", gap: 10 },
+  sectionTitle: { fontSize: 16, fontWeight: "700" },
+
+  meterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  meterValue: { fontSize: 16, fontWeight: "700" },
+
+  denomRow: { flexDirection: "row", gap: 10 },
+  denomOption: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  denomOptionActive: { borderColor: "#999" },
+  denomText: { fontSize: 13, fontWeight: "600" },
+  denomTextActive: { fontSize: 13, fontWeight: "800" },
+
+  switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+
+  segmentRow: { flexDirection: "row", gap: 10 },
+  segmentButton: { flex: 1, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: "#ddd", alignItems: "center" },
+  segmentButtonActive: { borderColor: "#999" },
+  segmentText: { fontSize: 13, fontWeight: "600" },
+  segmentTextActive: { fontSize: 13, fontWeight: "800" },
+
+  presetBlock: { gap: 8 },
+  presetsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  presetButton: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  presetButtonActive: { borderColor: "#999" },
+  presetText: { fontSize: 13, fontWeight: "600" },
+  presetTextActive: { fontSize: 13, fontWeight: "800" },
+
+  builderBlock: { gap: 10 },
+  builderRow: { flexDirection: "row", gap: 10 },
+  builderButton: { flex: 1, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: "#ddd", alignItems: "center" },
+  builderButtonDisabled: { opacity: 0.4 },
+  builderText: { fontSize: 13, fontWeight: "700" },
+  builderTextDisabled: { fontSize: 13, fontWeight: "700" },
+
+  helperText: { fontSize: 12, opacity: 0.75 },
 });
 
 export default CreatorScreen;

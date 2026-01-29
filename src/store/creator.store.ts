@@ -1,10 +1,9 @@
-import { create } from "zustand";
+﻿import { create } from "zustand";
 
-import { sumGroups } from "../core/clave/builder";
 import { Meter } from "../core/types";
 import { useSavedBarsStore } from "./savedBars.store";
 
-type CreatorBar = {
+export type CreatorBar = {
   id: string;
   meter: Meter;
   claveEnabled: boolean;
@@ -12,136 +11,155 @@ type CreatorBar = {
   name?: string;
 };
 
+type InitFromCurrentInput = {
+  meter: Meter;
+  claveEnabled: boolean;
+  groups?: number[];
+};
+
 type CreatorState = {
   bars: CreatorBar[];
   selectedBarId: string | null;
-  initFromCurrentIfEmpty: (current: { meter: Meter; claveEnabled: boolean; groups?: number[] }) => void;
-  selectBar: (id: string | null) => void;
-  addEmptyBar: (afterId?: string) => void;
-  addFromSavedBar: (savedBarId: string, afterId?: string) => void;
-  duplicateBar: (id: string) => void;
-  removeBar: (id: string) => void;
-  updateBar: (id: string, patch: Partial<Omit<CreatorBar, "id">>) => void;
-  replaceAll: (bars: CreatorBar[]) => void;
+
+  initFromCurrentIfEmpty: (input: InitFromCurrentInput) => void;
+
+  selectBar: (barId: string) => void;
+
+  addEmptyBar: (afterBarId?: string) => void;
+  addFromSavedBar: (savedId: string, afterBarId?: string) => void;
+  duplicateBar: (barId: string) => void;
+
+  removeBar: (barId: string) => void;
+  updateBar: (barId: string, patch: Partial<Omit<CreatorBar, "id">>) => void;
 };
 
-const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const newId = () => `bar_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-const normalizeGroups = (meter: Meter, claveEnabled: boolean, groups?: number[]): number[] | undefined => {
-  if (!claveEnabled) return undefined;
-  if (!groups || groups.length === 0) return undefined;
-  if (sumGroups(groups) !== meter.n) return undefined;
-  return groups;
-};
+const cloneMeter = (m: Meter): Meter => ({ n: m.n, d: m.d });
+const cloneGroups = (g?: number[]) => (Array.isArray(g) ? g.slice() : g);
 
-const normalizeBar = (bar: CreatorBar): CreatorBar => {
-  const groups = normalizeGroups(bar.meter, bar.claveEnabled, bar.groups);
-  return { ...bar, groups };
-};
-
-const createEmptyBar = (): CreatorBar => ({
-  id: createId(),
-  meter: { n: 4, d: 4 },
-  claveEnabled: false,
-  groups: undefined,
+const normalizePatch = (patch: Partial<Omit<CreatorBar, "id">>) => ({
+  ...patch,
+  meter: patch.meter ? cloneMeter(patch.meter) : undefined,
+  groups: patch.groups ? cloneGroups(patch.groups) : patch.groups,
 });
 
-const insertAfter = (bars: CreatorBar[], bar: CreatorBar, afterId?: string) => {
-  if (!afterId) return [...bars, bar];
-  const index = bars.findIndex((item) => item.id === afterId);
-  if (index === -1) return [...bars, bar];
-  const next = [...bars];
-  next.splice(index + 1, 0, bar);
-  return next;
+const insertAfter = (arr: CreatorBar[], afterId: string | undefined, item: CreatorBar) => {
+  if (!afterId) return [...arr, item];
+  const idx = arr.findIndex((b) => b.id === afterId);
+  if (idx === -1) return [...arr, item];
+  return [...arr.slice(0, idx + 1), item, ...arr.slice(idx + 1)];
 };
 
 export const useCreatorStore = create<CreatorState>((set, get) => ({
   bars: [],
   selectedBarId: null,
-  initFromCurrentIfEmpty: (current) => {
-    const state = get();
-    if (state.bars.length > 0) return;
-    const initial: CreatorBar = normalizeBar({
-      id: createId(),
-      meter: current.meter,
-      claveEnabled: current.claveEnabled,
-      groups: current.groups,
-    });
-    set({ bars: [initial], selectedBarId: initial.id });
-  },
-  selectBar: (id) => set({ selectedBarId: id }),
-  addEmptyBar: (afterId) => {
-    const newBar = createEmptyBar();
-    set((state) => ({
-      bars: insertAfter(state.bars, newBar, afterId),
-      selectedBarId: newBar.id,
-    }));
-  },
-  addFromSavedBar: (savedBarId, afterId) => {
-    const savedBar = useSavedBarsStore.getState().getById(savedBarId);
-    if (!savedBar) return;
-    const newBar: CreatorBar = normalizeBar({
-      id: createId(),
-      meter: savedBar.meter,
-      claveEnabled: savedBar.claveEnabled,
-      groups: savedBar.groups,
-      name: savedBar.name,
-    });
-    set((state) => ({
-      bars: insertAfter(state.bars, newBar, afterId),
-      selectedBarId: newBar.id,
-    }));
-  },
-  duplicateBar: (id) => {
-    const bar = get().bars.find((item) => item.id === id);
-    if (!bar) return;
-    const newBar: CreatorBar = {
-      ...bar,
-      id: createId(),
-      name: bar.name ? `${bar.name} (copy)` : bar.name,
+
+  initFromCurrentIfEmpty: ({ meter, claveEnabled, groups }) => {
+    const { bars } = get();
+    if (bars.length > 0) return;
+
+    const first: CreatorBar = {
+      id: newId(),
+      meter: cloneMeter(meter),
+      claveEnabled: !!claveEnabled,
+      groups: cloneGroups(groups),
     };
+
+    set({ bars: [first], selectedBarId: first.id });
+  },
+
+  selectBar: (barId) => {
+    set({ selectedBarId: barId });
+  },
+
+  addEmptyBar: (afterBarId) => {
+    const base = get().bars[get().bars.length - 1];
+    const bar: CreatorBar = {
+      id: newId(),
+      meter: base ? cloneMeter(base.meter) : { n: 4, d: 4 },
+      claveEnabled: false,
+      groups: [],
+      name: "",
+    };
+
     set((state) => ({
-      bars: insertAfter(state.bars, normalizeBar(newBar), id),
-      selectedBarId: newBar.id,
+      bars: insertAfter(state.bars, afterBarId, bar),
+      selectedBarId: bar.id,
     }));
   },
-  removeBar: (id) => {
+
+  addFromSavedBar: (savedId, afterBarId) => {
+    const savedBars = useSavedBarsStore.getState().savedBars as any[];
+    const saved = savedBars.find((s) => s.id === savedId);
+    if (!saved) return;
+
+    const bar: CreatorBar = {
+      id: newId(),
+      meter: saved.meter ? cloneMeter(saved.meter) : { n: 4, d: 4 },
+      claveEnabled: !!saved.claveEnabled,
+      groups: cloneGroups(saved.groups),
+      name: typeof saved.name === "string" ? saved.name : "",
+    };
+
+    set((state) => ({
+      bars: insertAfter(state.bars, afterBarId, bar),
+      selectedBarId: bar.id,
+    }));
+  },
+
+  duplicateBar: (barId) => {
+    const src = get().bars.find((b) => b.id === barId);
+    if (!src) return;
+
+    const copy: CreatorBar = {
+      ...src,
+      id: newId(),
+      meter: cloneMeter(src.meter),
+      groups: cloneGroups(src.groups),
+      name: src.name ? `${src.name} (copy)` : "",
+    };
+
+    set((state) => ({
+      bars: insertAfter(state.bars, barId, copy),
+      selectedBarId: copy.id,
+    }));
+  },
+
+  removeBar: (barId) => {
     set((state) => {
-      const remaining = state.bars.filter((bar) => bar.id !== id);
-      if (remaining.length === 0) {
-        const empty = createEmptyBar();
-        return { bars: [empty], selectedBarId: empty.id };
+      const nextBars = state.bars.filter((b) => b.id !== barId);
+
+      let nextSelected: string | null = state.selectedBarId;
+      if (state.selectedBarId === barId) {
+        nextSelected = nextBars.length ? nextBars[Math.max(0, nextBars.length - 1)].id : null;
       }
-      const nextSelected = state.selectedBarId === id ? remaining[0].id : state.selectedBarId;
-      return { bars: remaining, selectedBarId: nextSelected };
+
+      return { bars: nextBars, selectedBarId: nextSelected };
     });
   },
-  updateBar: (id, patch) => {
+
+  updateBar: (barId, patch) => {
+    const p = normalizePatch(patch);
+
     set((state) => ({
-      bars: state.bars.map((bar) => {
-        if (bar.id !== id) return bar;
-        const meter = patch.meter ?? bar.meter;
-        const claveEnabled = patch.claveEnabled ?? bar.claveEnabled;
-        const groups = normalizeGroups(meter, claveEnabled, patch.groups ?? bar.groups);
-        return normalizeBar({
-          ...bar,
-          ...patch,
-          meter,
-          claveEnabled,
-          groups,
-        });
+      bars: state.bars.map((b) => {
+        if (b.id !== barId) return b;
+
+        const next: CreatorBar = {
+          ...b,
+          ...p,
+          meter: p.meter ?? b.meter,
+          groups: p.groups !== undefined ? p.groups : b.groups,
+        };
+
+        next.meter = cloneMeter(next.meter);
+        next.groups = cloneGroups(next.groups);
+
+        return next;
       }),
     }));
   },
-  replaceAll: (bars) => {
-    const normalized = bars.map(normalizeBar);
-    if (normalized.length === 0) {
-      const empty = createEmptyBar();
-      set({ bars: [empty], selectedBarId: empty.id });
-      return;
-    }
-    set({ bars: normalized, selectedBarId: normalized[0].id });
-  },
 }));
 
-export type { CreatorBar };
+export default useCreatorStore;

@@ -14,7 +14,7 @@ const Tab = createBottomTabNavigator<TabsParamList>();
 
 function TabsNavigator() {
   return (
-    <Tab.Navigator id="MainTabs">
+    <Tab.Navigator id="root-tabs">
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Creator" component={CreatorScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />

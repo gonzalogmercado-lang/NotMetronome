@@ -1,51 +1,26 @@
-import { useCallback, useState } from "react";
-import { Button, StyleSheet, Text, View } from "react-native";
-
-import { useMetronomeAudio } from "../../audio/useMetronomeAudio";
+﻿import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 function SettingsScreen() {
-  const { start, stop, audioState, audioDetails } = useMetronomeAudio({
-    bpm: 120,
-    meter: { n: 4, d: 4 },
-  });
-
-  const [lastAction, setLastAction] = useState<string>("OK - idle");
-
-  const handleTestBeep = useCallback(() => {
-    void (async () => {
-      const ok = await start();
-      setLastAction(ok ? "OK - start()" : "FAIL - start()");
-      // “beep” simple: arrancar y cortar rápido
-      setTimeout(() => {
-        void stop();
-      }, 200);
-    })();
-  }, [start, stop]);
-
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Settings</Text>
-      <Text>Configure NotMetronome defaults here.</Text>
-      <Text>Audio state: {audioState}</Text>
-      <Text>Last action: {lastAction}</Text>
-      {audioDetails ? <Text>Audio details: {audioDetails}</Text> : null}
-      <Button title="Test Beep" onPress={handleTestBeep} />
-    </View>
+
+      <View style={styles.card}>
+        <Text style={styles.label}>Audio</Text>
+        <Text style={styles.text}>
+          (Placeholder) Panel de settings. El debug de audio lo dejamos fuera por ahora para no acoplar la UI a la API del engine.
+        </Text>
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-    gap: 8,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: "600",
-  },
+  container: { padding: 16, gap: 12 },
+  title: { fontSize: 22, fontWeight: "700" },
+  card: { padding: 14, borderRadius: 12, borderWidth: 1, borderColor: "#ddd" },
+  label: { fontSize: 14, fontWeight: "700", marginBottom: 6 },
+  text: { fontSize: 14, lineHeight: 20 },
 });
 
 export default SettingsScreen;
