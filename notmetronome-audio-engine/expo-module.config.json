@@ -1,9 +1,10 @@
 {
   "name": "notmetronome-audio-engine",
-  "platforms": ["android"],
+  "platforms": ["android", "apple"],
+  "apple": {
+    "modules": ["NotmetronomeAudioEngineModule"]
+  },
   "android": {
-    "modules": [
-      "expo.modules.notmetronomeaudioengine.NotmetronomeAudioEngineModule"
-    ]
+    "modules": ["expo.modules.notmetronomeaudioengine.NotmetronomeAudioEngineModule"]
   }
 }

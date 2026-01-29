@@ -23,12 +23,58 @@ export type MetronomeStartInput = {
   bars?: BarConfig[];
   startBarIndex?: number;
   loop?: boolean;
+
+  // Beat guide (forces beat boundary audible)
+  beatGuide?: boolean;
 };
 
 type UseMetronomeAudioOptions = MetronomeStartInput & {
   onTick?: (tick: ScheduledTick) => void;
   onBarChange?: (barIndex: number) => void;
   accentGains?: Partial<Record<AccentLevel, number>>;
+};
+
+// =========================
+// 🔥 Helpers: keys + deep clones (para matar “residual bars”)
+// =========================
+const bools01 = (arr?: boolean[]) => (arr && arr.length ? arr.map((v) => (v ? "1" : "0")).join("") : "");
+const nums = (arr?: number[]) => (arr && arr.length ? arr.join(",") : "");
+const masks01 = (m?: boolean[][]) => (m && m.length ? m.map((row) => bools01(row)).join("|") : "");
+
+const cloneBoolArray = (arr?: boolean[]) => (arr ? arr.slice() : arr);
+const cloneBoolMatrix = (m?: boolean[][]) => (m ? m.map((row) => (row ? row.slice() : row)) : m);
+
+const cloneBars = (bars?: BarConfig[]) => {
+  if (!bars) return bars;
+  // deep clone “lo importante” + preserva cualquier campo extra que exista
+  return bars.map((b: any) => ({
+    ...b,
+    meter: b?.meter ? { ...b.meter } : b.meter,
+    groups: Array.isArray(b?.groups) ? b.groups.slice() : b.groups,
+    subdivMask: Array.isArray(b?.subdivMask) ? b.subdivMask.slice() : b.subdivMask,
+    pulseSubdivs: Array.isArray(b?.pulseSubdivs) ? b.pulseSubdivs.slice() : b.pulseSubdivs,
+    pulseSubdivMasks: Array.isArray(b?.pulseSubdivMasks)
+      ? b.pulseSubdivMasks.map((row: any) => (Array.isArray(row) ? row.slice() : row))
+      : b.pulseSubdivMasks,
+  }));
+};
+
+const buildBarsKey = (bars?: BarConfig[]) => {
+  if (!bars || bars.length === 0) return "bars:none";
+  return (
+    "bars:" +
+    bars
+      .map((b: any) => {
+        const m = b?.meter ? `${b.meter.n}/${b.meter.d}` : "x/x";
+        const g = nums(b?.groups);
+        const sd = Number.isFinite(b?.subdiv) ? String(b.subdiv) : "";
+        const sm = bools01(b?.subdivMask);
+        const ps = nums(b?.pulseSubdivs);
+        const pm = masks01(b?.pulseSubdivMasks);
+        return `${m}#g:${g}#sd:${sd}#sm:${sm}#ps:${ps}#pm:${pm}`;
+      })
+      .join("||")
+  );
 };
 
 export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
@@ -43,10 +89,27 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     bars,
     startBarIndex,
     loop,
+    beatGuide,
     onTick,
     onBarChange,
     accentGains,
   } = options;
+
+  // 🔥 Content-keys (NO dependen de “referencia cambió”)
+  const meterKey = `m:${meter.n}/${meter.d}`;
+  const groupsKey = `g:${nums(groups)}`;
+  const subdivMaskKey = `sm:${bools01(subdivMask)}`;
+  const pulseKey = `p:${nums(pulseSubdivs)}|pm:${masks01(pulseSubdivMasks)}`;
+  const barsKey = buildBarsKey(bars);
+  const timelineKey = `${barsKey}|start:${startBarIndex ?? 0}|loop:${loop ? "1" : "0"}|bg:${beatGuide ? "1" : "0"}`;
+
+  // 🔥 Snapshots (deep clones) para que el scheduler/engine reciba “estado real”
+  const meterSnap = useMemo(() => ({ ...meter }), [meterKey]);
+  const groupsSnap = useMemo(() => (groups ? groups.slice() : groups), [groupsKey]);
+  const subdivMaskSnap = useMemo(() => cloneBoolArray(subdivMask), [subdivMaskKey]);
+  const pulseSubdivsSnap = useMemo(() => (pulseSubdivs ? pulseSubdivs.slice() : pulseSubdivs), [pulseKey]);
+  const pulseSubdivMasksSnap = useMemo(() => cloneBoolMatrix(pulseSubdivMasks), [pulseKey]);
+  const barsSnap = useMemo(() => cloneBars(bars), [barsKey]);
 
   const schedulerRef = useRef<MetronomeAudioScheduler | null>(null);
   const [audioState, setAudioState] = useState<"idle" | "ready" | "error" | "starting">("idle");
@@ -64,13 +127,11 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
         onTick?.(tick);
       },
       onStateChange: (state, details) => {
-        const next =
-          state === "ready" ? "ready" : state === "error" ? "error" : "idle";
+        const next = state === "ready" ? "ready" : state === "error" ? "error" : "idle";
 
         setAudioState(next);
         setAudioDetails(details ?? null);
 
-        // Logging mínimo (visible en consola RN), cero logcat
         if (next === "error") {
           console.log("[audio] ERROR:", details ?? "(sin detalle)");
         } else if (details) {
@@ -88,20 +149,41 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
     schedulerRef.current?.setAccentGains(accentMap);
   }, [accentMap]);
 
+  // 🔥 Update SIEMPRE que cambie el CONTENIDO, no solo la referencia
   useEffect(() => {
     schedulerRef.current?.update({
+      applyAt: "now",
+
       bpm,
-      meter,
-      groups,
+      meter: meterSnap,
+      groups: groupsSnap,
       subdiv,
-      subdivMask,
-      pulseSubdivs,
-      pulseSubdivMasks,
-      bars,
+      subdivMask: subdivMaskSnap,
+      pulseSubdivs: pulseSubdivsSnap,
+      pulseSubdivMasks: pulseSubdivMasksSnap,
+      bars: barsSnap,
       startBarIndex,
       loop,
+      beatGuide,
     });
-  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks, bars, startBarIndex, loop]);
+  }, [
+    bpm,
+    meterKey,
+    groupsKey,
+    subdiv,
+    subdivMaskKey,
+    pulseKey,
+    timelineKey,
+    meterSnap,
+    groupsSnap,
+    subdivMaskSnap,
+    pulseSubdivsSnap,
+    pulseSubdivMasksSnap,
+    barsSnap,
+    startBarIndex,
+    loop,
+    beatGuide,
+  ]);
 
   useEffect(
     () => () => {
@@ -116,31 +198,48 @@ export function useMetronomeAudio(options: UseMetronomeAudioOptions) {
 
     const result = await schedulerRef.current?.start({
       bpm,
-      meter,
-      groups,
+      meter: meterSnap,
+      groups: groupsSnap,
       subdiv,
-      subdivMask,
-      pulseSubdivs,
-      pulseSubdivMasks,
-      bars,
+      subdivMask: subdivMaskSnap,
+      pulseSubdivs: pulseSubdivsSnap,
+      pulseSubdivMasks: pulseSubdivMasksSnap,
+      bars: barsSnap,
       startBarIndex,
       loop,
+      beatGuide,
     });
 
-    // Si falla y el scheduler no llegó a emitir details, dejá una pista
     if (!result) {
       setAudioDetails((prev) => prev ?? "start() devolvió false (sin detalle). Mirar consola RN.");
     }
 
     return result ?? false;
-  }, [bpm, groups, meter, subdiv, subdivMask, pulseSubdivs, pulseSubdivMasks, bars, startBarIndex, loop]);
+  }, [
+    bpm,
+    meterKey,
+    groupsKey,
+    subdiv,
+    subdivMaskKey,
+    pulseKey,
+    timelineKey,
+    meterSnap,
+    groupsSnap,
+    subdivMaskSnap,
+    pulseSubdivsSnap,
+    pulseSubdivMasksSnap,
+    barsSnap,
+    startBarIndex,
+    loop,
+    beatGuide,
+  ]);
 
   const stop = useCallback(() => {
     setLastTick(null);
     return schedulerRef.current?.stop();
   }, []);
 
-  const accentLevels = useMemo(() => deriveAccentPerTick(meter, groups), [groups, meter]);
+  const accentLevels = useMemo(() => deriveAccentPerTick(meter, groups), [groupsKey, meterKey, meter]);
 
   const tickInfo: TickInfo | null = useMemo(
     () =>

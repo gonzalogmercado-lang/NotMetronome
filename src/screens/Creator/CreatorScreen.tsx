@@ -4,7 +4,7 @@ import { Button, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "r
 import { addGroup, canAddGroup, remainingTicks, undoGroup } from "../../core/clave/builder";
 import { formatGroups, getClavePresets } from "../../core/clave/presets";
 import { Meter } from "../../core/types";
-import { CreatorBar, useCreatorStore } from "../../store/creator.store";
+import { useCreatorStore } from "../../store/creator.store";
 import { useMeterStore } from "../../store/meter.store";
 import { useSavedBarsStore } from "../../store/savedBars.store";
 
@@ -14,7 +14,9 @@ const isGroupsComplete = (meter: Meter, groups?: number[]) => {
 };
 
 function CreatorScreen() {
-  const { meter, claveEnabled, groups } = useMeterStore();
+  const { meter, groups } = useMeterStore();
+  const claveEnabled = !!(groups && groups.length > 0);
+
   const { savedBars } = useSavedBarsStore();
   const {
     bars,
@@ -80,10 +82,16 @@ function CreatorScreen() {
           return (
             <View key={bar.id} style={[styles.barCard, selectedBarId === bar.id && styles.barCardSelected]}>
               <View style={styles.barHeader}>
-                <Text style={styles.barTitle}>{bar.meter.n}/{bar.meter.d}</Text>
-                <Text style={[styles.badge, claveActive ? styles.badgeOn : styles.badgeOff]}>{claveActive ? "ON" : "OFF"}</Text>
+                <Text style={styles.barTitle}>
+                  {bar.meter.n}/{bar.meter.d}
+                </Text>
+                <Text style={[styles.badge, claveActive ? styles.badgeOn : styles.badgeOff]}>
+                  {claveActive ? "ON" : "OFF"}
+                </Text>
               </View>
-              <Text style={styles.barSubtitle}>Clave: {bar.groups && bar.groups.length > 0 ? formatGroups(bar.groups) : "—"}</Text>
+              <Text style={styles.barSubtitle}>
+                Clave: {bar.groups && bar.groups.length > 0 ? formatGroups(bar.groups) : "—"}
+              </Text>
               {bar.name ? <Text style={styles.barName}>{bar.name}</Text> : null}
               <View style={styles.barActions}>
                 <Pressable style={styles.actionButton} onPress={() => selectBar(bar.id)}>
@@ -118,7 +126,9 @@ function CreatorScreen() {
                   savedBars.map((saved) => (
                     <Pressable key={saved.id} style={styles.savedItem} onPress={() => handleInsertSaved(saved.id)}>
                       <Text style={styles.savedName}>{saved.name}</Text>
-                      <Text style={styles.savedMeta}>{saved.meter.n}/{saved.meter.d}</Text>
+                      <Text style={styles.savedMeta}>
+                        {saved.meter.n}/{saved.meter.d}
+                      </Text>
                     </Pressable>
                   ))
                 )}
@@ -132,9 +142,19 @@ function CreatorScreen() {
         <View style={styles.editorBlock}>
           <Text style={styles.sectionTitle}>Editor</Text>
           <View style={styles.meterRow}>
-            <Button title="-" onPress={() => updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: Math.max(1, selectedBar.meter.n - 1) } })} />
-            <Text style={styles.meterValue}>{selectedBar.meter.n}/{selectedBar.meter.d}</Text>
-            <Button title="+" onPress={() => updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: selectedBar.meter.n + 1 } })} />
+            <Button
+              title="-"
+              onPress={() =>
+                updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: Math.max(1, selectedBar.meter.n - 1) } })
+              }
+            />
+            <Text style={styles.meterValue}>
+              {selectedBar.meter.n}/{selectedBar.meter.d}
+            </Text>
+            <Button
+              title="+"
+              onPress={() => updateBar(selectedBar.id, { meter: { ...selectedBar.meter, n: selectedBar.meter.n + 1 } })}
+            />
           </View>
           <View style={styles.denomRow}>
             {[4, 8, 16].map((value) => {
@@ -153,12 +173,11 @@ function CreatorScreen() {
 
           <View style={styles.switchRow}>
             <Text style={styles.sectionTitle}>Clave</Text>
-            <Switch
-              value={selectedBar.claveEnabled}
-              onValueChange={(value) => updateBar(selectedBar.id, { claveEnabled: value })}
-            />
+            <Switch value={selectedBar.claveEnabled} onValueChange={(value) => updateBar(selectedBar.id, { claveEnabled: value })} />
           </View>
-          <Text style={styles.helperText}>Clave actual: {selectedBar.groups && selectedBar.groups.length > 0 ? formatGroups(selectedBar.groups) : "—"}</Text>
+          <Text style={styles.helperText}>
+            Clave actual: {selectedBar.groups && selectedBar.groups.length > 0 ? formatGroups(selectedBar.groups) : "—"}
+          </Text>
 
           {selectedBar.claveEnabled ? (
             <>
@@ -220,7 +239,10 @@ function CreatorScreen() {
                     })}
                   </View>
                   <View style={styles.builderRow}>
-                    <Pressable style={styles.builderButton} onPress={() => updateBar(selectedBar.id, { groups: undoGroup(editorGroups) })}>
+                    <Pressable
+                      style={styles.builderButton}
+                      onPress={() => updateBar(selectedBar.id, { groups: undoGroup(editorGroups) })}
+                    >
                       <Text style={styles.builderText}>Undo</Text>
                     </Pressable>
                     <Pressable style={styles.builderButton} onPress={() => updateBar(selectedBar.id, { groups: [] })}>

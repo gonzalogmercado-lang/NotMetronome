@@ -51,7 +51,7 @@ class NotmetronomeAudioEngineModule : Module() {
   @Volatile private var subdivMask: BooleanArray = booleanArrayOf(true)
 
   // NEW: per-beat subdivisions (native)
-  // If present and length == meterN, overrides legacy subdiv/subdivMask per beat.
+  // If present and length == meterN (and meterD==4), overrides legacy subdiv/subdivMask per beat.
   @Volatile private var pulseSubdivs: IntArray? = null
   @Volatile private var pulseSubdivMasks: Array<BooleanArray>? = null
 
@@ -71,7 +71,6 @@ class NotmetronomeAudioEngineModule : Module() {
       val p = parseStartParams(params)
 
       if (running.get()) {
-        // Respect applyAt (default "now" if provided, else "bar" is fine too)
         val applyAt = p.applyAt.lowercase()
         val safe = if (applyAt == "now") p.copy(applyAt = "now") else p.copy(applyAt = "bar")
         pendingParams.set(safe)
@@ -156,7 +155,6 @@ class NotmetronomeAudioEngineModule : Module() {
         return@AsyncFunction null
       }
 
-      // Apply on audio thread at the correct boundary
       pendingParams.set(safe)
       emitState("running", "update queued (applyAt=${safe.applyAt})")
 
@@ -225,12 +223,20 @@ class NotmetronomeAudioEngineModule : Module() {
             val shouldApply = (applyAt == "now") || (applyAt == "bar" && barBeatIndex == 0)
             if (shouldApply) {
               pendingParams.set(null)
+
+              val prevN = meterN
+              val prevD = meterD
+
               applyParamsNow(pending.copy(applyAt = "now"))
               groupStarts = computeGroupStarts(meterN, groups)
 
-              // If meter changed and current bar index is out of range, re-sync safely
               val n = meterN.coerceAtLeast(1)
-              if (applyAt == "bar") {
+
+              // Re-sync bar index:
+              // - applyAt="bar": always restart at downbeat
+              // - applyAt="now": restart only if meter changed; else keep position if valid
+              val meterChanged = (prevN != meterN) || (prevD != meterD)
+              if (applyAt == "bar" || meterChanged) {
                 barBeatIndex = 0
               } else {
                 if (barBeatIndex !in 0 until n) barBeatIndex = 0
@@ -262,26 +268,28 @@ class NotmetronomeAudioEngineModule : Module() {
           val atMs = ((totalFramesWritten.toDouble() / sr.toDouble()) * 1000.0)
           emitTick(tickIndex, bt, isDownbeat, atMs)
 
-          // Decide per-beat subdiv/mask (NEW if present, else legacy global)
+          // Decide per-beat subdiv/mask (NEW if present AND denominator==4, else legacy global)
           val curLegacySubdiv = clampInt(subdiv, 1, 8)
           val curLegacyMask = normalizeSubdivMask(curLegacySubdiv, subdivMask)
 
           val curPulseSubdivs = pulseSubdivs
           val curPulseMasks = pulseSubdivMasks
 
-          val beatSubdiv = if (curPulseSubdivs != null && curPulseSubdivs.size == curMeterN) {
-            clampInt(curPulseSubdivs[bt], 1, 8)
+          val usePulse =
+            (curMeterD == 4) &&
+              (curPulseSubdivs != null) &&
+              (curPulseMasks != null) &&
+              (curPulseSubdivs.size == curMeterN) &&
+              (curPulseMasks.size == curMeterN)
+
+          val beatSubdiv = if (usePulse) {
+            clampInt(curPulseSubdivs!![bt], 1, 8)
           } else {
             curLegacySubdiv
           }
 
-          val beatMask = if (
-            curPulseSubdivs != null &&
-            curPulseMasks != null &&
-            curPulseSubdivs.size == curMeterN &&
-            curPulseMasks.size == curMeterN
-          ) {
-            normalizeSubdivMask(beatSubdiv, curPulseMasks[bt])
+          val beatMask = if (usePulse) {
+            normalizeSubdivMask(beatSubdiv, curPulseMasks!![bt])
           } else {
             curLegacyMask
           }
@@ -575,18 +583,15 @@ class NotmetronomeAudioEngineModule : Module() {
     return v
   }
 
-  // Normalize a mask to length n, and ensure at least one "true"
+  // Normalize a mask to length n. ✅ Permit ALL-FALSE (silence) intentionally.
   private fun normalizeSubdivMask(subdiv: Int, mask: BooleanArray?): BooleanArray {
     val n = clampInt(subdiv, 1, 8)
     if (mask == null || mask.isEmpty()) return BooleanArray(n) { true }
-    if (mask.size == n) {
-      val any = mask.any { it }
-      return if (any) mask else BooleanArray(n) { i -> i == 0 }
-    }
+    if (mask.size == n) return mask
+
     val out = BooleanArray(n) { true }
     val take = minOf(n, mask.size)
     for (i in 0 until take) out[i] = mask[i]
-    if (!out.any { it }) out[0] = true
     return out
   }
 
@@ -604,7 +609,6 @@ class NotmetronomeAudioEngineModule : Module() {
           else -> true
         }
       }
-      if (!bools.any { it }) bools[0] = true
       return bools
     }
 

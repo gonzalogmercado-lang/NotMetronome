@@ -24,7 +24,7 @@ type StartOptions = {
   subdiv?: number;
   subdivMask?: boolean[];
 
-  // NEW per-beat subdivisions (web supports; native currently ignores)
+  // NEW per-beat subdivisions (web supports; native may support)
   pulseSubdivs?: number[];
   pulseSubdivMasks?: boolean[][];
 
@@ -32,6 +32,9 @@ type StartOptions = {
   bars?: BarConfig[];
   startBarIndex?: number;
   loop?: boolean;
+
+  // Beat guide (forces beat boundary audible)
+  beatGuide?: boolean;
 };
 
 type UpdateOptions = StartOptions & {
@@ -43,6 +46,11 @@ export type ScheduledTick = TickInfo & {
   accentGain: number;
   scheduledTime: number; // seconds timeline (web) OR approx audio time (native)
   barIndex?: number;
+
+  // UI playhead info
+  subIndex?: number; // 0..subCount-1
+  subCount?: number; // current beat subdiv
+  isAudible?: boolean; // derived from mask (+ beat guide)
 };
 
 type SchedulerEvents = {
@@ -60,6 +68,10 @@ const START_DELAY_MS = 60;
 const ENVELOPE_ATTACK_SECONDS = 0.002;
 const ENVELOPE_DECAY_SECONDS = 0.016;
 const OSCILLATOR_DURATION_SECONDS = 0.03;
+
+// Subdiv limits
+const MAX_SUBDIV_NATIVE = 8; // keep native-safe today
+const MAX_SUBDIV_WEB = 16; // web + UI/store support
 
 const ACCENT_FREQUENCY: Record<AccentLevel, number> = {
   BAR: 1200,
@@ -165,38 +177,47 @@ function clampInt(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.floor(Number(value))));
 }
 
-function normalizeSubdivMask(subdiv: number, mask?: boolean[]) {
-  const n = clampInt(subdiv, 1, 8);
-  const base = Array.from({ length: n }).map((_, i) => (mask?.[i] ?? true));
-  if (!base.some(Boolean)) base[0] = true;
-  return base;
+function normalizeSubdivMask(subdiv: number, mask?: boolean[], maxSubdiv = MAX_SUBDIV_WEB) {
+  const n = clampInt(subdiv, 1, maxSubdiv);
+  // allow full silence (all false) on web path; beatGuide can override
+  return Array.from({ length: n }).map((_, i) => mask?.[i] ?? true);
 }
 
-function normalizePulseSubdivs(meterN: number, pulseSubdivs?: number[]) {
+function applyBeatGuideToMask(mask: boolean[], enabled: boolean) {
+  if (!enabled) return mask;
+  const out = mask.slice();
+  out[0] = true;
+  return out;
+}
+
+function applyBeatGuideToPulseMasks(pulseMasks: boolean[][], enabled: boolean) {
+  if (!enabled) return pulseMasks;
+  return pulseMasks.map((m) => applyBeatGuideToMask(m, true));
+}
+
+function normalizePulseSubdivs(meterN: number, pulseSubdivs?: number[], maxSubdiv = MAX_SUBDIV_WEB) {
   const n = Math.max(1, meterN);
   if (!pulseSubdivs || pulseSubdivs.length === 0) return undefined;
   const out = Array.from({ length: n }).map((_, i) =>
-    clampInt(pulseSubdivs[i] ?? pulseSubdivs[pulseSubdivs.length - 1] ?? 1, 1, 8)
+    clampInt(pulseSubdivs[i] ?? pulseSubdivs[pulseSubdivs.length - 1] ?? 1, 1, maxSubdiv)
   );
   return out;
 }
 
-function normalizePulseMasks(meterN: number, pulseSubdivs: number[], pulseMasks?: boolean[][]) {
+function normalizePulseMasks(
+  meterN: number,
+  pulseSubdivs: number[],
+  pulseMasks?: boolean[][],
+  maxSubdiv = MAX_SUBDIV_WEB
+) {
   const n = Math.max(1, meterN);
   const out: boolean[][] = [];
   for (let i = 0; i < n; i++) {
-    const subdiv = clampInt(pulseSubdivs[i] ?? 1, 1, 8);
+    const subdiv = clampInt(pulseSubdivs[i] ?? 1, 1, maxSubdiv);
     const mask = pulseMasks?.[i];
-    out.push(normalizeSubdivMask(subdiv, mask));
+    out.push(normalizeSubdivMask(subdiv, mask, maxSubdiv));
   }
   return out;
-}
-
-function maxInt(arr?: number[]) {
-  if (!arr || arr.length === 0) return undefined;
-  let m = arr[0] ?? 1;
-  for (let i = 1; i < arr.length; i++) m = Math.max(m, arr[i] ?? 1);
-  return m;
 }
 
 function normalizeMeter(m: Meter): Meter {
@@ -210,34 +231,68 @@ function sum(values: number[]) {
   return values.reduce((t, v) => t + v, 0);
 }
 
-function normalizeGroupsForMeter(groups: number[] | undefined, meterN: number) {
+// ---- Clave helpers (beat-mode vs pool-mode) ----
+
+function normalizeClaveGroups(groups: number[] | undefined, meterN: number, poolTicks?: number): number[] | undefined {
   if (!groups || groups.length === 0) return undefined;
-  const safe = groups.map((g) => clampInt(g, 1, 64));
-  return sum(safe) === meterN ? safe : undefined;
+
+  const safe: number[] = [];
+  let total = 0;
+
+  for (let i = 0; i < groups.length; i += 1) {
+    const raw = Math.floor(Number(groups[i]));
+    if (!Number.isFinite(raw)) return undefined;
+
+    // Rule: no "morse": 2..8 only
+    if (raw < 2 || raw > 8) return undefined;
+
+    safe.push(raw);
+    total += raw;
+  }
+
+  if (total === meterN) return safe; // beat-mode
+  if (typeof poolTicks === "number" && poolTicks > 0 && total === poolTicks) return safe; // pool-mode
+
+  return undefined;
+}
+
+function computePoolTicks(meterN: number, pulseSubdivs?: number[], legacySubdiv = 1, maxSubdiv = MAX_SUBDIV_WEB) {
+  if (pulseSubdivs && pulseSubdivs.length === meterN) {
+    return sum(pulseSubdivs.map((v) => clampInt(v ?? 1, 1, maxSubdiv)));
+  }
+  return meterN * clampInt(legacySubdiv ?? 1, 1, maxSubdiv);
 }
 
 function normalizeBars(bars: BarConfig[]): BarConfig[] {
   return (bars ?? [])
     .map((b) => {
       const meter = normalizeMeter(b.meter);
-      const groups = normalizeGroupsForMeter(b.groups, meter.n);
 
       // Per-beat subdiv only makes sense for denominator 4 (as per current UX rule)
       let pulseSubdivs: number[] | undefined = undefined;
       let pulseSubdivMasks: boolean[][] | undefined = undefined;
 
       if (meter.d === 4) {
-        const ps = normalizePulseSubdivs(meter.n, b.pulseSubdivs);
+        const ps = normalizePulseSubdivs(meter.n, b.pulseSubdivs, MAX_SUBDIV_WEB);
         if (ps) {
           pulseSubdivs = ps;
-          pulseSubdivMasks = normalizePulseMasks(meter.n, ps, b.pulseSubdivMasks);
+          pulseSubdivMasks = normalizePulseMasks(meter.n, ps, b.pulseSubdivMasks, MAX_SUBDIV_WEB);
         }
       }
+
+      const poolTicks = meter.d === 4 ? computePoolTicks(meter.n, pulseSubdivs, 1, MAX_SUBDIV_WEB) : undefined;
+      const groups = normalizeClaveGroups(b.groups, meter.n, poolTicks);
 
       return { meter, groups, pulseSubdivs, pulseSubdivMasks };
     })
     .filter((b) => b.meter && b.meter.n >= 1 && b.meter.d >= 1);
 }
+
+// ---------- Fingerprint helpers (for "BPM-only" fast-path safety) ----------
+
+const keyNums = (arr?: number[]) => (arr && arr.length ? arr.join(",") : "");
+const keyBools = (arr?: boolean[]) => (arr && arr.length ? arr.map((v) => (v ? "1" : "0")).join("") : "");
+const keyMasks = (m?: boolean[][]) => (m && m.length ? m.map((row) => keyBools(row)).join("|") : "");
 
 // =====================================================
 
@@ -246,6 +301,13 @@ class MetronomeAudioScheduler {
   private native: NativeEngineModule | null = null;
   private nativeTickSub: { remove: () => void } | null = null;
   private nativeStateSub: { remove: () => void } | null = null;
+
+  // Native UI synthesis (when native only reports 1 tick per beat)
+  private nativePrevBeatKey: string | null = null;
+  private nativeSeesSubticks = false;
+  private nativeSubIndex = 0;
+  private nativeUiTimers: ReturnType<typeof setTimeout>[] = [];
+  private nativePendingSynthKey: string | null = null;
 
   // WebAudio
   private context: AudioContextLike | null = null;
@@ -263,11 +325,22 @@ class MetronomeAudioScheduler {
   private subdiv = 1; // 1..8
   private subdivMask: boolean[] = [true];
 
-  // Per-beat (web uses; native currently ignores)
+  // Per-beat (web uses; native may use)
   private pulseSubdivs?: number[];
   private pulseSubdivMasks?: boolean[][];
 
-  private accentLevels: AccentLevel[] = deriveAccentPerTick(this.meter, this.groups);
+  // Beat guide
+  private beatGuideEnabled = false;
+
+  // Accent model (beat vs pool)
+  private accentMode: "beat" | "pool" = "beat";
+  private accentLevelsBeat: AccentLevel[] = deriveAccentPerTick(this.meter, undefined);
+  private accentLevelsPool: AccentLevel[] = [];
+  private poolTicksPerBar = 0;
+
+  // What we send to native (native only understands beat-mode groups today)
+  private nativeGroups?: number[];
+
   private accentGains: AccentGainMap = ACCENT_GAIN;
 
   // Web scheduler counters
@@ -287,12 +360,56 @@ class MetronomeAudioScheduler {
   // Web UI sync: notify bar changes aligned to audio time
   private lastBarNotifyTickIndex = -1;
 
+  // Unified bar-change dedupe
+  private lastNotifiedBarIndex: number | null = null;
+
   private isRunning = false;
   private events: SchedulerEvents;
+
+  // Timeline fingerprint (EXCLUDES bpm). Used to decide if a native "bpm-only" update is safe.
+  private timelineSig = "";
 
   constructor(events: SchedulerEvents = {}) {
     this.events = events;
     this.native = getNativeEngine();
+    this.recomputeAccentModel(MAX_SUBDIV_WEB);
+    this.timelineSig = this.computeTimelineSigFromCurrent();
+  }
+
+  private notifyBarChange(barIndex: number) {
+    if (!this.events.onBarChange) return;
+    if (this.lastNotifiedBarIndex === barIndex) return;
+    this.lastNotifiedBarIndex = barIndex;
+    this.events.onBarChange(barIndex);
+  }
+
+  private computeTimelineSigFromCurrent(): string {
+    const parts: string[] = [];
+
+    parts.push(`seq:${this.sequenceEnabled ? "1" : "0"}`);
+    parts.push(`loop:${this.loop ? "1" : "0"}`);
+    parts.push(`bg:${this.beatGuideEnabled ? "1" : "0"}`);
+    parts.push(`legacy:${this.subdiv}|${keyBools(this.subdivMask)}`);
+
+    if (this.sequenceEnabled && this.bars && this.bars.length > 0) {
+      const b = this.bars
+        .map((bar) => {
+          const m = `${bar.meter.n}/${bar.meter.d}`;
+          const g = keyNums(bar.groups);
+          const ps = keyNums(bar.pulseSubdivs);
+          const pm = keyMasks(bar.pulseSubdivMasks);
+          return `${m}#g:${g}#ps:${ps}#pm:${pm}`;
+        })
+        .join("||");
+      parts.push(`bars:${b}`);
+    } else {
+      parts.push(`m:${this.meter.n}/${this.meter.d}`);
+      parts.push(`g:${keyNums(this.groups)}`);
+      parts.push(`ps:${keyNums(this.pulseSubdivs)}`);
+      parts.push(`pm:${keyMasks(this.pulseSubdivMasks)}`);
+    }
+
+    return parts.join("|");
   }
 
   private secondsPerTickForMeter(m: Meter) {
@@ -301,6 +418,77 @@ class MetronomeAudioScheduler {
 
   private get scheduleAheadSeconds() {
     return SCHEDULE_AHEAD_MS / 1000;
+  }
+
+  private clearNativeUiTimers() {
+    this.nativeUiTimers.forEach((t) => clearTimeout(t));
+    this.nativeUiTimers = [];
+    this.nativePendingSynthKey = null;
+  }
+
+  private computeBeatSubdivAndMask(barTick: number, maxSubdiv: number) {
+    const safeBarTick = clampInt(barTick ?? 0, 0, Math.max(0, this.meter.n - 1));
+
+    const beatSubdiv =
+      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
+        ? clampInt(this.pulseSubdivs[safeBarTick] ?? 1, 1, maxSubdiv)
+        : clampInt(this.subdiv ?? 1, 1, maxSubdiv);
+
+    const beatMaskRaw =
+      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
+        ? normalizeSubdivMask(beatSubdiv, this.pulseSubdivMasks?.[safeBarTick], maxSubdiv)
+        : normalizeSubdivMask(beatSubdiv, this.subdivMask, maxSubdiv);
+
+    const beatMask = applyBeatGuideToMask(beatMaskRaw, this.beatGuideEnabled);
+
+    return { beatSubdiv, beatMask };
+  }
+
+  private computePoolStartForBeat(barTick: number, maxSubdiv: number) {
+    const n = clampInt(barTick ?? 0, 0, Math.max(0, this.meter.n));
+    let cursor = 0;
+
+    for (let i = 0; i < n; i += 1) {
+      const s =
+        this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
+          ? clampInt(this.pulseSubdivs[i] ?? 1, 1, maxSubdiv)
+          : clampInt(this.subdiv ?? 1, 1, maxSubdiv);
+      cursor += s;
+    }
+
+    return cursor;
+  }
+
+  private getAccentForSubTick(barTick: number, subIndex: number, maxSubdiv: number): AccentLevel {
+    if (this.accentMode !== "pool") {
+      return subIndex === 0 ? (this.accentLevelsBeat[barTick] ?? "WEAK") : "WEAK";
+    }
+
+    const start = this.computePoolStartForBeat(barTick, maxSubdiv);
+    const idx = start + clampInt(subIndex ?? 0, 0, 99999);
+    return this.accentLevelsPool[idx] ?? "WEAK";
+  }
+
+  private recomputeAccentModel(maxSubdiv: number) {
+    // pool ticks is meaningful mainly for d=4, but we compute it anyway
+    this.poolTicksPerBar = computePoolTicks(this.meter.n, this.pulseSubdivs, this.subdiv, maxSubdiv);
+
+    const gsum = this.groups && this.groups.length ? sum(this.groups) : 0;
+
+    if (this.groups && this.groups.length > 0 && gsum === this.poolTicksPerBar && this.poolTicksPerBar > 0) {
+      // pool-mode: accents over full subtick pool
+      this.accentMode = "pool";
+      this.accentLevelsPool = deriveAccentPerTick(this.meter, this.groups, { ticksPerBar: this.poolTicksPerBar });
+      this.accentLevelsBeat = deriveAccentPerTick(this.meter, undefined);
+      this.nativeGroups = undefined; // don't lie to native engine
+      return;
+    }
+
+    // beat-mode (default)
+    this.accentMode = "beat";
+    this.accentLevelsPool = [];
+    this.accentLevelsBeat = deriveAccentPerTick(this.meter, this.groups);
+    this.nativeGroups = this.groups; // native understands beat-mode groups
   }
 
   setAccentGains(map: Partial<AccentGainMap>) {
@@ -312,36 +500,58 @@ class MetronomeAudioScheduler {
 
     this.setFromOptions(options, "start");
 
+    // reset native UI synthesis state
+    this.nativePrevBeatKey = null;
+    this.nativeSeesSubticks = false;
+    this.nativeSubIndex = 0;
+    this.clearNativeUiTimers();
+
+    // reset bar notify
+    this.lastNotifiedBarIndex = null;
+    this.lastBarNotifyTickIndex = -1;
+
     if (this.native) {
       try {
         this.attachNativeListenersIfNeeded();
         this.isRunning = true;
 
-        // IMPORTANT:
-        // Native engine currently consumes legacy subdiv/subdivMask.
-        // Do NOT "fake" per-beat pulseSubdivs by turning them into a global subdiv,
-        // because that changes the native tick semantics and can make 4/4 *feel* like 3/4.
-        // Keep legacy subdiv as-is. pulseSubdivs are passed only for future native support.
         const hasPulse = !!(this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n);
 
-        const legacySubdiv = clampInt(this.subdiv ?? 1, 1, 8);
-        const legacyMask = normalizeSubdivMask(legacySubdiv, this.subdivMask);
+        const legacySubdiv = clampInt(this.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
+        const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
+        const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
+
+        const pulseSubdivsNative = hasPulse
+          ? (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE))
+          : undefined;
+
+        const pulseSubdivMasksNative =
+          hasPulse && pulseSubdivsNative
+            ? applyBeatGuideToPulseMasks(
+                normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
+                this.beatGuideEnabled
+              )
+            : undefined;
 
         await this.native.start({
           bpm: this.bpm,
           meterN: this.meter.n,
           meterD: this.meter.d,
-          groups: this.groups,
+          groups: this.nativeGroups,
 
-          // Future-proof keys (native may ignore today)
-          ...(hasPulse ? { pulseSubdivs: this.pulseSubdivs, pulseSubdivMasks: this.pulseSubdivMasks } : {}),
+          ...(hasPulse ? { pulseSubdivs: pulseSubdivsNative, pulseSubdivMasks: pulseSubdivMasksNative } : {}),
 
-          // Stable / correct bar math path on Android today
           subdiv: legacySubdiv,
           subdivMask: legacyMask,
         });
 
         this.events.onStateChange?.("ready");
+
+        // Immediately notify starting bar (native path otherwise waits for boundary logic)
+        if (this.sequenceEnabled) {
+          this.notifyBarChange(this.barIndex);
+        }
+
         return true;
       } catch (e: any) {
         this.isRunning = false;
@@ -363,6 +573,11 @@ class MetronomeAudioScheduler {
 
     this.nextTickTime = this.context.currentTime + START_DELAY_MS / 1000;
 
+    // Immediate notify for web too
+    if (this.sequenceEnabled) {
+      this.notifyBarChange(this.barIndex);
+    }
+
     this.scheduleWindow();
     this.timerId = setInterval(() => this.scheduleWindow(), LOOKAHEAD_MS);
 
@@ -370,6 +585,12 @@ class MetronomeAudioScheduler {
   }
 
   async stop() {
+    this.clearNativeUiTimers();
+
+    // reset bar notify
+    this.lastNotifiedBarIndex = null;
+    this.lastBarNotifyTickIndex = -1;
+
     if (this.native) {
       try {
         await this.native.stop();
@@ -415,32 +636,53 @@ class MetronomeAudioScheduler {
   }
 
   async update(options: UpdateOptions) {
+    const prevTimelineSig = this.timelineSig;
+
     this.setFromOptions(options, "update");
+    const nextTimelineSig = this.timelineSig;
 
     if (this.native) {
       const applyAt = options.applyAt ?? "now";
       try {
-        // If we already queued a "next bar" update, don't stomp it every render.
+        // If we have a queued bar swap AND the update is "now":
+        // - If ONLY bpm changed (timelineSig unchanged), keep the queued swap and update bpm only.
+        // - If timeline changed, we MUST overwrite native pending update (avoid phantom bars) and cancel the queued swap.
         if (this.sequenceEnabled && this.pendingBarIndex !== null && applyAt === "now") {
-          // still allow BPM changes ASAP (safe)
-          await this.native.update({ bpm: this.bpm, applyAt: "now" });
-          return;
+          const timelineUnchanged = prevTimelineSig === nextTimelineSig;
+          if (timelineUnchanged) {
+            await this.native.update({ bpm: this.bpm, applyAt: "now" });
+            return;
+          }
+          // timeline changed -> cancel queued bar swap on our side
+          this.pendingBarIndex = null;
         }
 
         const hasPulse = !!(this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n);
 
-        // Same rule as start(): do not derive legacy subdiv from pulseSubdivs.
-        const legacySubdiv = clampInt(this.subdiv ?? 1, 1, 8);
-        const legacyMask = normalizeSubdivMask(legacySubdiv, this.subdivMask);
+        const legacySubdiv = clampInt(this.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
+        const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
+        const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
+
+        const pulseSubdivsNative = hasPulse
+          ? (this.pulseSubdivs ?? []).map((v) => clampInt(v ?? 1, 1, MAX_SUBDIV_NATIVE))
+          : undefined;
+
+        const pulseSubdivMasksNative =
+          hasPulse && pulseSubdivsNative
+            ? applyBeatGuideToPulseMasks(
+                normalizePulseMasks(this.meter.n, pulseSubdivsNative, this.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
+                this.beatGuideEnabled
+              )
+            : undefined;
 
         await this.native.update({
           bpm: this.bpm,
           meterN: this.meter.n,
           meterD: this.meter.d,
-          groups: this.groups,
+          groups: this.nativeGroups,
           applyAt,
 
-          ...(hasPulse ? { pulseSubdivs: this.pulseSubdivs, pulseSubdivMasks: this.pulseSubdivMasks } : {}),
+          ...(hasPulse ? { pulseSubdivs: pulseSubdivsNative, pulseSubdivMasks: pulseSubdivMasksNative } : {}),
 
           subdiv: legacySubdiv,
           subdivMask: legacyMask,
@@ -461,11 +703,12 @@ class MetronomeAudioScheduler {
 
   private setFromOptions(options: StartOptions, mode: "start" | "update") {
     this.bpm = options.bpm;
+    this.beatGuideEnabled = !!options.beatGuide;
 
     // Keep legacy subdiv ALWAYS (native uses it for any denominator)
-    const nextSubdiv = clampInt(options.subdiv ?? 1, 1, 8);
+    const nextSubdiv = clampInt(options.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
     this.subdiv = nextSubdiv;
-    this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask);
+    this.subdivMask = normalizeSubdivMask(nextSubdiv, options.subdivMask, MAX_SUBDIV_NATIVE);
 
     const bars = options.bars && options.bars.length > 0 ? normalizeBars(options.bars) : undefined;
 
@@ -479,11 +722,12 @@ class MetronomeAudioScheduler {
         this.barTick = 0;
         this.pendingBarIndex = null;
       } else {
-        // keep current bar index within range if bars count changed
         this.barIndex = clampInt(this.barIndex, 0, bars.length - 1);
       }
 
       this.applyActiveBar(this.barIndex, { resetBarTick: mode === "start" });
+      this.recomputeAccentModel(MAX_SUBDIV_WEB);
+      this.timelineSig = this.computeTimelineSigFromCurrent();
       return;
     }
 
@@ -494,18 +738,22 @@ class MetronomeAudioScheduler {
     this.pendingBarIndex = null;
 
     this.meter = normalizeMeter(options.meter);
-    this.groups = normalizeGroupsForMeter(options.groups, this.meter.n);
 
-    const ps = normalizePulseSubdivs(this.meter.n, options.pulseSubdivs);
+    const ps = normalizePulseSubdivs(this.meter.n, options.pulseSubdivs, MAX_SUBDIV_WEB);
     if (ps && this.meter.d === 4) {
       this.pulseSubdivs = ps;
-      this.pulseSubdivMasks = normalizePulseMasks(this.meter.n, ps, options.pulseSubdivMasks);
+      this.pulseSubdivMasks = normalizePulseMasks(this.meter.n, ps, options.pulseSubdivMasks, MAX_SUBDIV_WEB);
     } else {
       this.pulseSubdivs = undefined;
       this.pulseSubdivMasks = undefined;
     }
 
-    this.accentLevels = deriveAccentPerTick(this.meter, this.groups);
+    const poolTicks =
+      this.meter.d === 4 ? computePoolTicks(this.meter.n, this.pulseSubdivs, this.subdiv, MAX_SUBDIV_WEB) : undefined;
+    this.groups = normalizeClaveGroups(options.groups, this.meter.n, poolTicks);
+
+    this.recomputeAccentModel(MAX_SUBDIV_WEB);
+    this.timelineSig = this.computeTimelineSigFromCurrent();
   }
 
   private applyActiveBar(index: number, opts: { resetBarTick: boolean }) {
@@ -515,14 +763,12 @@ class MetronomeAudioScheduler {
 
     const bar = this.bars[safeIndex];
     this.meter = normalizeMeter(bar.meter);
-    this.groups = normalizeGroupsForMeter(bar.groups, this.meter.n);
 
-    // Per-beat subdiv only for denominator 4 (current product rule)
     if (this.meter.d === 4) {
-      const ps = normalizePulseSubdivs(this.meter.n, bar.pulseSubdivs);
+      const ps = normalizePulseSubdivs(this.meter.n, bar.pulseSubdivs, MAX_SUBDIV_WEB);
       if (ps) {
         this.pulseSubdivs = ps;
-        this.pulseSubdivMasks = normalizePulseMasks(this.meter.n, ps, bar.pulseSubdivMasks);
+        this.pulseSubdivMasks = normalizePulseMasks(this.meter.n, ps, bar.pulseSubdivMasks, MAX_SUBDIV_WEB);
       } else {
         this.pulseSubdivs = undefined;
         this.pulseSubdivMasks = undefined;
@@ -532,7 +778,11 @@ class MetronomeAudioScheduler {
       this.pulseSubdivMasks = undefined;
     }
 
-    this.accentLevels = deriveAccentPerTick(this.meter, this.groups);
+    const poolTicks =
+      this.meter.d === 4 ? computePoolTicks(this.meter.n, this.pulseSubdivs, this.subdiv, MAX_SUBDIV_WEB) : undefined;
+    this.groups = normalizeClaveGroups(bar.groups, this.meter.n, poolTicks);
+
+    this.recomputeAccentModel(MAX_SUBDIV_WEB);
 
     if (opts.resetBarTick) {
       this.barTick = 0;
@@ -549,38 +799,48 @@ class MetronomeAudioScheduler {
   private queueNativeNextBarUpdateIfNeeded(e: NativeEngineTickEvent) {
     if (!this.native) return;
     if (!this.sequenceEnabled || !this.bars || this.bars.length <= 1) return;
-
-    // If already queued, wait
     if (this.pendingBarIndex !== null) return;
 
-    // Queue on LAST tick of the bar so applyAt="bar" hits boundary perfectly
     const lastTickOfBar = this.meter.n - 1;
     if (e.barTick !== lastTickOfBar) return;
 
     const nextIndex = this.getNextBarIndex();
     const nextBar = this.bars[nextIndex];
-
     const nextMeter = normalizeMeter(nextBar.meter);
 
-    // Keep legacy subdiv stable across bars (do not derive from pulseSubdivs)
-    const legacySubdiv = clampInt(this.subdiv ?? 1, 1, 8);
-    const legacyMask = normalizeSubdivMask(legacySubdiv, this.subdivMask);
+    const legacySubdiv = clampInt(this.subdiv ?? 1, 1, MAX_SUBDIV_NATIVE);
+    const legacyMaskRaw = normalizeSubdivMask(legacySubdiv, this.subdivMask, MAX_SUBDIV_NATIVE);
+    const legacyMask = applyBeatGuideToMask(legacyMaskRaw, this.beatGuideEnabled);
 
     this.pendingBarIndex = nextIndex;
 
-    // Ask native to swap params exactly at next bar boundary
+    const psNative =
+      nextBar.pulseSubdivs && nextMeter.d === 4
+        ? normalizePulseSubdivs(nextMeter.n, nextBar.pulseSubdivs, MAX_SUBDIV_NATIVE)
+        : undefined;
+
+    const pmNative = psNative
+      ? applyBeatGuideToPulseMasks(
+          normalizePulseMasks(nextMeter.n, psNative, nextBar.pulseSubdivMasks, MAX_SUBDIV_NATIVE),
+          this.beatGuideEnabled
+        )
+      : undefined;
+
+    // Native only: groups must be beat-mode (sum == meter.n)
+    const nextGroupsNative = normalizeClaveGroups(nextBar.groups, nextMeter.n, undefined);
+
     this.native
       .update({
         bpm: this.bpm,
         meterN: nextMeter.n,
         meterD: nextMeter.d,
-        groups: normalizeGroupsForMeter(nextBar.groups, nextMeter.n),
+        groups: nextGroupsNative,
         applyAt: "bar",
 
-        ...(nextBar.pulseSubdivs && nextMeter.d === 4
+        ...(psNative
           ? {
-              pulseSubdivs: normalizePulseSubdivs(nextMeter.n, nextBar.pulseSubdivs),
-              pulseSubdivMasks: nextBar.pulseSubdivMasks,
+              pulseSubdivs: psNative,
+              pulseSubdivMasks: pmNative,
             }
           : {}),
 
@@ -588,7 +848,6 @@ class MetronomeAudioScheduler {
         subdivMask: legacyMask,
       })
       .catch(() => {
-        // if update fails, drop pending (so we can retry next bar)
         this.pendingBarIndex = null;
       });
   }
@@ -600,32 +859,123 @@ class MetronomeAudioScheduler {
     if (this.nativeTickSub && this.nativeStateSub) return;
 
     this.nativeTickSub = this.native.addListener("onTick", (e) => {
-      // If we queued a bar swap, commit it exactly when native hits downbeat of new bar
-      if (this.sequenceEnabled && this.pendingBarIndex !== null && e.isDownbeat && e.barTick === 0) {
+      // Commit bar swap as soon as native starts a new bar (barTick==0).
+      if (this.sequenceEnabled && this.pendingBarIndex !== null && e.barTick === 0) {
         this.applyActiveBar(this.pendingBarIndex, { resetBarTick: true });
         this.pendingBarIndex = null;
-        this.events.onBarChange?.(this.barIndex);
+        this.notifyBarChange(this.barIndex);
       }
 
       // Queue next bar update (applyAt="bar") near the end of current bar
       this.queueNativeNextBarUpdateIfNeeded(e);
 
-      // Accent lookup MUST be by barTick (not tickIndex % meter.n) to survive meter changes
-      const accentLevel = this.accentLevels[e.barTick] ?? "WEAK";
-      const accentGain = this.accentGains[accentLevel] ?? 1;
+      const { beatSubdiv, beatMask } = this.computeBeatSubdivAndMask(e.barTick, MAX_SUBDIV_NATIVE);
+      const secondsPerTick = this.secondsPerTickForMeter(this.meter);
+      const subMs = (secondsPerTick * 1000) / Math.max(1, beatSubdiv);
 
-      const tick: ScheduledTick = {
-        tickIndex: e.tickIndex,
-        atMs: e.atAudioTimeMs,
-        barTick: e.barTick,
-        isDownbeat: e.isDownbeat,
-        accentGain,
-        accentLevel,
-        scheduledTime: e.atAudioTimeMs / 1000,
-        barIndex: this.sequenceEnabled ? this.barIndex : undefined,
-      };
+      const currentBarIndex = this.sequenceEnabled ? this.barIndex : undefined;
+      const beatKey = `${currentBarIndex ?? -1}:${e.barTick}`;
 
-      this.events.onTick?.(tick);
+      const sameBeat = this.nativePrevBeatKey === beatKey;
+
+      if (sameBeat) {
+        // Native is emitting subticks (or at least >1 event per beat)
+        this.nativeSeesSubticks = true;
+        this.clearNativeUiTimers();
+
+        this.nativeSubIndex = (this.nativeSubIndex + 1) % Math.max(1, beatSubdiv);
+
+        const subIndex = this.nativeSubIndex;
+        const isAudible = !!beatMask[subIndex];
+
+        const accentLevel = this.getAccentForSubTick(e.barTick, subIndex, MAX_SUBDIV_NATIVE);
+        const accentGain = this.accentGains[accentLevel] ?? 1;
+
+        const tick: ScheduledTick = {
+          tickIndex: e.tickIndex,
+          atMs: e.atAudioTimeMs,
+          barTick: e.barTick,
+          isDownbeat: e.isDownbeat && subIndex === 0,
+          accentGain,
+          accentLevel,
+          scheduledTime: e.atAudioTimeMs / 1000,
+          barIndex: currentBarIndex,
+
+          subIndex,
+          subCount: beatSubdiv,
+          isAudible,
+        };
+
+        this.events.onTick?.(tick);
+      } else {
+        // New beat boundary
+        this.nativePrevBeatKey = beatKey;
+        this.nativeSubIndex = 0;
+
+        const isAudible0 = !!beatMask[0];
+        const accentLevel0 = this.getAccentForSubTick(e.barTick, 0, MAX_SUBDIV_NATIVE);
+        const accentGain0 = this.accentGains[accentLevel0] ?? 1;
+
+        // Emit the boundary tick immediately as subIndex=0
+        this.events.onTick?.({
+          tickIndex: e.tickIndex,
+          atMs: e.atAudioTimeMs,
+          barTick: e.barTick,
+          isDownbeat: e.isDownbeat,
+          accentGain: accentGain0,
+          accentLevel: accentLevel0,
+          scheduledTime: e.atAudioTimeMs / 1000,
+          barIndex: currentBarIndex,
+          subIndex: 0,
+          subCount: beatSubdiv,
+          isAudible: isAudible0,
+        });
+
+        // If native does NOT send subticks, synthesize i=1..N-1 for UI
+        this.clearNativeUiTimers();
+
+        if (beatSubdiv > 1) {
+          this.nativePendingSynthKey = beatKey;
+
+          const checkDelay = Math.max(10, Math.ceil(subMs * 1.05)); // after expected 2nd subtick
+          const checkTimer = setTimeout(() => {
+            if (!this.isRunning) return;
+            if (this.nativeSeesSubticks) return;
+            if (this.nativePendingSynthKey !== beatKey) return;
+            if (this.nativePrevBeatKey !== beatKey) return;
+
+            for (let i = 1; i < beatSubdiv; i += 1) {
+              const delay = Math.max(0, Math.round(i * subMs));
+              const t = setTimeout(() => {
+                if (!this.isRunning) return;
+                if (this.nativePrevBeatKey !== beatKey) return;
+
+                const isAudible = !!beatMask[i];
+                const accentLevel = this.getAccentForSubTick(e.barTick, i, MAX_SUBDIV_NATIVE);
+                const accentGain = this.accentGains[accentLevel] ?? 1;
+
+                this.events.onTick?.({
+                  tickIndex: e.tickIndex * 1000 + i, // UI-only uniqueness
+                  atMs: e.atAudioTimeMs + i * subMs,
+                  barTick: e.barTick,
+                  isDownbeat: false,
+                  accentGain,
+                  accentLevel,
+                  scheduledTime: (e.atAudioTimeMs + i * subMs) / 1000,
+                  barIndex: currentBarIndex,
+                  subIndex: i,
+                  subCount: beatSubdiv,
+                  isAudible,
+                });
+              }, delay);
+
+              this.nativeUiTimers.push(t);
+            }
+          }, checkDelay);
+
+          this.nativeUiTimers.push(checkTimer);
+        }
+      }
     });
 
     this.nativeStateSub = this.native.addListener("onState", (e) => {
@@ -678,7 +1028,6 @@ class MetronomeAudioScheduler {
     if (!this.context) return;
     if (!this.events.onBarChange) return;
 
-    // notify only on downbeat tick scheduling
     if (this.barTick !== 0) return;
 
     if (this.lastBarNotifyTickIndex === this.tickIndex) return;
@@ -687,66 +1036,80 @@ class MetronomeAudioScheduler {
     const delayMs = Math.max(0, (atTime - this.context.currentTime) * 1000);
     setTimeout(() => {
       if (!this.isRunning) return;
-      this.events.onBarChange?.(this.barIndex);
+      this.notifyBarChange(this.barIndex);
     }, delayMs);
   }
 
-  // Returns seconds per tick for the CURRENT active bar
   private scheduleTick(atTime: number): number {
     if (!this.context) return 0.01;
 
     const secondsPerTick = this.secondsPerTickForMeter(this.meter);
-
-    // UI sync for sequence mode (aligned to audio time)
     this.maybeNotifyBarChange(atTime);
 
-    const accentLevel = this.accentLevels[this.barTick] ?? "WEAK";
-    const accentGain = this.accentGains[accentLevel] ?? 1;
-
     const barTick = this.barTick;
-
-    const beatSubdiv =
-      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
-        ? clampInt(this.pulseSubdivs[barTick] ?? 1, 1, 8)
-        : this.subdiv;
-
-    const beatMask =
-      this.pulseSubdivs && this.pulseSubdivs.length === this.meter.n
-        ? normalizeSubdivMask(beatSubdiv, this.pulseSubdivMasks?.[barTick])
-        : normalizeSubdivMask(beatSubdiv, this.subdivMask);
+    const { beatSubdiv, beatMask } = this.computeBeatSubdivAndMask(barTick, MAX_SUBDIV_WEB);
 
     if (beatSubdiv > 1) {
       const secondsPerSub = secondsPerTick / beatSubdiv;
 
       for (let i = 0; i < beatSubdiv; i++) {
-        if (!beatMask[i]) continue;
         const t = atTime + i * secondsPerSub;
-        const level: AccentLevel = i === 0 ? accentLevel : "WEAK";
-        const gain = i === 0 ? accentGain : 1;
-        this.scheduleClick(t, level, gain);
+
+        const isAudible = !!beatMask[i];
+        const level = this.getAccentForSubTick(barTick, i, MAX_SUBDIV_WEB);
+        const gain = this.accentGains[level] ?? 1;
+
+        if (isAudible) {
+          this.scheduleClick(t, level, gain);
+        }
+
+        const tick: ScheduledTick = {
+          tickIndex: this.tickIndex,
+          atMs: t * 1000,
+          barTick,
+          isDownbeat: barTick === 0 && i === 0,
+          accentGain: gain,
+          accentLevel: level,
+          scheduledTime: t,
+          barIndex: this.sequenceEnabled ? this.barIndex : undefined,
+          subIndex: i,
+          subCount: beatSubdiv,
+          isAudible,
+        };
+
+        this.events.onTick?.(tick);
+        this.tickIndex += 1;
       }
     } else {
-      this.scheduleClick(atTime, accentLevel, accentGain);
+      const isAudible = !!beatMask[0];
+      const level = this.getAccentForSubTick(barTick, 0, MAX_SUBDIV_WEB);
+      const gain = this.accentGains[level] ?? 1;
+
+      if (isAudible) {
+        this.scheduleClick(atTime, level, gain);
+      }
+
+      const tick: ScheduledTick = {
+        tickIndex: this.tickIndex,
+        atMs: atTime * 1000,
+        barTick,
+        isDownbeat: barTick === 0,
+        accentGain: gain,
+        accentLevel: level,
+        scheduledTime: atTime,
+        barIndex: this.sequenceEnabled ? this.barIndex : undefined,
+        subIndex: 0,
+        subCount: 1,
+        isAudible,
+      };
+
+      this.events.onTick?.(tick);
+      this.tickIndex += 1;
     }
 
-    const tick: ScheduledTick = {
-      tickIndex: this.tickIndex,
-      atMs: atTime * 1000,
-      barTick,
-      isDownbeat: barTick === 0,
-      accentGain,
-      accentLevel,
-      scheduledTime: atTime,
-      barIndex: this.sequenceEnabled ? this.barIndex : undefined,
-    };
-
-    this.events.onTick?.(tick);
-
-    // advance counters
-    this.tickIndex += 1;
+    // advance beat counter
     this.barTick += 1;
 
-    // If bar ended, advance to next bar (sequence) or wrap barTick (single)
     if (this.barTick >= this.meter.n) {
       this.barTick = 0;
 
